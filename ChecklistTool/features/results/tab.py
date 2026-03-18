@@ -118,6 +118,30 @@ class TabResults(QWidget):
                 f"未变 {getattr(diff_result, 'count_unchanged', 0)} | "
                 f"不匹配合计 {total}"
             )
+            # 追加：问题行号（源文件行号，1-based）
+            try:
+                if "__diff_type__" in df.columns and "__source_row__" in df.columns:
+                    def _rows_of(t):
+                        sub = df[df["__diff_type__"] == t]
+                        rows = [int(x) for x in sub["__source_row__"].tolist() if str(x).strip() != ""]
+                        rows = sorted(set(rows))
+                        if len(rows) > 20:
+                            return ",".join(str(x) for x in rows[:20]) + f"...(共{len(rows)}行)"
+                        return ",".join(str(x) for x in rows)
+                    add_rows = _rows_of(DIFF_ADDED)
+                    del_rows = _rows_of(DIFF_DELETED)
+                    mod_rows = _rows_of(DIFF_MODIFIED)
+                    parts = []
+                    if add_rows:
+                        parts.append(f"新增行:{add_rows}")
+                    if del_rows:
+                        parts.append(f"删除行:{del_rows}")
+                    if mod_rows:
+                        parts.append(f"修改行:{mod_rows}")
+                    if parts:
+                        summary = summary + " | " + "；".join(parts)
+            except Exception:
+                pass
         self._summary_label.setText(summary)
         self._fill_table(df, max_display_rows=2500)
 

@@ -133,7 +133,7 @@ class DiffEngine:
         if not compare_cols:
             compare_cols = [
                 c for c in all_cols
-                if c not in ("__diff_type__", "__changed_fields__", "__row_index__")
+                if c not in ("__diff_type__", "__changed_fields__", "__row_index__", "__source_row__")
                 and c in df_b.columns and c in df_a.columns
             ]
 
