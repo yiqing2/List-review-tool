@@ -5,7 +5,7 @@
 ## 目录结构
 
 ```
-text_2/
+ChecklistTool/
 ├── main.py                 # 程序入口
 ├── config/                 # 配置
 │   ├── __init__.py

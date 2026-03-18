@@ -23,7 +23,7 @@ python main.py
 ## 项目结构（便于后续扩展）
 
 ```
-text_2/
+ChecklistTool/
 ├── main.py              # 入口，异常捕获与日志
 ├── config/              # 配置与路径
 │   └── app_config.py
