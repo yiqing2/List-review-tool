@@ -41,6 +41,55 @@ def _op_label(op: str) -> str:
     return m.get(op, op)
 
 
+def _logic_label(logic: str) -> str:
+    return "且(and)" if logic == "and" else ("或(or)" if logic == "or" else str(logic))
+
+
+def _format_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        # 列表值（如 in/not_in）更易读的展示
+        return "[" + ", ".join(str(x) for x in value) + "]"
+    return str(value)
+
+
+def _format_leaf_brief(node: RuleNode) -> str:
+    if not node or not getattr(node, "field", ""):
+        return "根"
+    v = _format_value(getattr(node, "value", None))
+    v_part = f" {v}" if v else ""
+    rn = (getattr(node, "rule_name", "") or "").strip()
+    rn_part = f" | 规则名:{rn}" if rn else ""
+    return f"{node.field} {_op_label(node.operator)}{v_part}{rn_part}"
+
+
+def _collect_leaf_briefs(node: RuleNode, limit: int = 3) -> list:
+    """收集若干叶子条件的简短预览，用于条件组节点的摘要显示。"""
+    briefs = []
+    stack = [node]
+    while stack and len(briefs) < limit:
+        n = stack.pop(0)
+        children = list(getattr(n, "children", []) or [])
+        if children:
+            stack.extend(children)
+        else:
+            # 叶子：有 field 才算“具体条件”；否则跳过（根节点）
+            if getattr(n, "field", ""):
+                briefs.append(_format_leaf_brief(n))
+    return briefs
+
+
+def _count_conditions(node: RuleNode) -> int:
+    """统计该节点下“叶子条件”的数量。"""
+    if not node:
+        return 0
+    children = list(getattr(node, "children", []) or [])
+    if children:
+        return sum(_count_conditions(c) for c in children)
+    return 1 if getattr(node, "field", "") else 0
+
+
 class RuleNodeEditDialog(QDialog):
     """编辑单个条件节点：字段、运算符、值、逻辑。"""
 
@@ -119,9 +168,14 @@ class RuleNodeEditDialog(QDialog):
 def _node_to_item(node: RuleNode) -> QTreeWidgetItem:
     """将 RuleNode 转为 QTreeWidgetItem（仅当前节点，不递归）。"""
     if node.children:
-        label = f"[{node.logic}] 条件组"
+        rn = (node.rule_name or "").strip()
+        count = _count_conditions(node)
+        briefs = _collect_leaf_briefs(node, limit=3)
+        briefs_part = (" | 示例: " + "；".join(briefs) + (" …" if count > len(briefs) else "")) if briefs else ""
+        rn_part = f" | 规则名:{rn}" if rn else ""
+        label = f"条件组({_logic_label(node.logic)}) | 条件数:{count}{rn_part}{briefs_part}"
     else:
-        label = f"{node.field} {_op_label(node.operator)} {node.value}" if node.field else "根"
+        label = _format_leaf_brief(node)
     item = QTreeWidgetItem([label])
     item.setData(0, Qt.ItemDataRole.UserRole, node)
     return item
@@ -151,6 +205,7 @@ class RuleTreeEditor(QWidget):
     def __init__(self, columns: list = None, parent=None):
         super().__init__(parent)
         self.columns = columns or []
+        self._editable = True
         self._setup_ui()
 
     def _setup_ui(self):
@@ -159,17 +214,28 @@ class RuleTreeEditor(QWidget):
         self.tree.setHeaderLabels(["条件"])
         layout.addWidget(self.tree)
         btn_layout = QHBoxLayout()
-        add_btn = QPushButton("添加根/子条件")
-        add_btn.clicked.connect(self._add_node)
-        edit_btn = QPushButton("编辑")
-        edit_btn.clicked.connect(self._edit_node)
-        del_btn = QPushButton("删除")
-        del_btn.clicked.connect(self._del_node)
-        btn_layout.addWidget(add_btn)
-        btn_layout.addWidget(edit_btn)
-        btn_layout.addWidget(del_btn)
+        self.add_btn = QPushButton("添加根/子条件")
+        self.add_btn.clicked.connect(self._add_node)
+        self.edit_btn = QPushButton("编辑")
+        self.edit_btn.clicked.connect(self._edit_node)
+        self.del_btn = QPushButton("删除")
+        self.del_btn.clicked.connect(self._del_node)
+        btn_layout.addWidget(self.add_btn)
+        btn_layout.addWidget(self.edit_btn)
+        btn_layout.addWidget(self.del_btn)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
+        self.set_editable(self._editable)
+
+    def set_editable(self, editable: bool):
+        """控制是否允许修改条件树（查看/展开不受影响）。"""
+        self._editable = bool(editable)
+        if hasattr(self, "add_btn"):
+            self.add_btn.setEnabled(self._editable)
+        if hasattr(self, "edit_btn"):
+            self.edit_btn.setEnabled(self._editable)
+        if hasattr(self, "del_btn"):
+            self.del_btn.setEnabled(self._editable)
 
     def set_columns(self, columns: list):
         self.columns = list(columns)
@@ -182,6 +248,8 @@ class RuleTreeEditor(QWidget):
         item = _node_to_item(root)
         _build_children(item, root)
         self.tree.addTopLevelItem(item)
+        item.setExpanded(True)
+        self.tree.expandAll()
 
     def get_root_node(self) -> RuleNode:
         """导出当前树为 RuleNode。"""
@@ -195,6 +263,8 @@ class RuleTreeEditor(QWidget):
 
     def _add_node(self):
         """添加子节点：若已选中某节点则在其下添加子条件，否则添加为顶层节点。"""
+        if not self._editable:
+            return
         item = self._current_item()
         node = RuleNode(field="", operator="eq", value=None, logic="and")
         new_item = _node_to_item(node)
@@ -207,6 +277,8 @@ class RuleTreeEditor(QWidget):
         self._edit_node()
 
     def _edit_node(self):
+        if not self._editable:
+            return
         item = self._current_item()
         if not item:
             return
@@ -216,11 +288,13 @@ class RuleTreeEditor(QWidget):
         dlg = RuleNodeEditDialog(node, self.columns, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             dlg.get_node()
-            label = f"[{node.logic}] 条件组" if node.children else (f"{node.field} {_op_label(node.operator)} {node.value}" if node.field else "根")
+            label = _node_to_item(node).text(0)
             item.setText(0, label)
             item.setData(0, Qt.ItemDataRole.UserRole, node)
 
     def _del_node(self):
+        if not self._editable:
+            return
         item = self._current_item()
         if not item:
             return
