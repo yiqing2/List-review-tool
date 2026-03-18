@@ -17,7 +17,6 @@ except ImportError:
     DIFF_MODIFIED = "modified"
     DIFF_UNCHANGED = "unchanged"
 
-# 数值比较容差；数值统一格式化为最多有效位数，避免 1.06E-03 与 0.00106 等判为不同
 NUMERIC_TOLERANCE = 1e-9
 NUMERIC_FORMAT = "%.10g"
 

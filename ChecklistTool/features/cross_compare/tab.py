@@ -99,7 +99,6 @@ class CrossCompareWorker(QThread):
                 df, _, _ = load_table_from_file(p, **kw_other)
                 other_dfs.append(df)
             self.progress.emit(80, "执行交叉对比...")
-            # 可选：键列去除机组号前缀（通常为 1~2 位数字，可能带 #/号/机组/分隔符）
             if self.strip_unit_prefix_in_keys and self.key_cols:
                 pat = re.compile(r"^\s*(\d{1,2})(?:\s*(?:#|＃|号|机组))?\s*[-_./\s]*")
 
@@ -122,7 +121,6 @@ class CrossCompareWorker(QThread):
 
                 base_df = _apply(base_df)
                 other_dfs = [_apply(df) for df in other_dfs]
-            # 默认参与对比的列：两表共有且排除内部列，避免只比行号导致“全未变”
             def _data_columns(base, other):
                 return [c for c in base.columns if c in other.columns and c not in ("__row_index__", "__source_row__", "__diff_type__", "__changed_fields__")]
             def _index_by_key(df, keys, engine):
@@ -134,12 +132,10 @@ class CrossCompareWorker(QThread):
             if self.missing_items_only:
                 if not self.key_cols:
                     raise Exception("缺项检测需要先选择键列。")
-                # 只输出“少了哪一项”：以两表中行数更多的为基准，找出另一表缺少的键，并标注基准行号
                 engine = DiffEngine(key_columns=list(self.key_cols), compare_columns=[])
                 results = []
                 for idx, df in enumerate(other_dfs):
                     p_other = self.other_paths[idx] if idx < len(self.other_paths) else ""
-                    # 以行数更多的文件为基准
                     if len(base_df) >= len(df):
                         more_df, more_path = base_df, self.base_path
                         less_df, less_path = df, p_other
@@ -150,7 +146,6 @@ class CrossCompareWorker(QThread):
                     keys = list(self.key_cols)
                     key_to_more = _index_by_key(more_df, keys, engine)
                     key_to_less = _index_by_key(less_df, keys, engine)
-                    # 缺项按“计数差”处理，支持重复键：more 中出现次数 > less 中出现次数的部分算缺项
                     missing_rows = []
                     for k, idxs_more in key_to_more.items():
                         idxs_less = key_to_less.get(k, [])
@@ -169,7 +164,7 @@ class CrossCompareWorker(QThread):
                         row_dict = more_df.iloc[i_more].to_dict()
                         row_dict["__base_file__"] = base_name
                         row_dict["__missing_in__"] = missing_in_name
-                        row_dict["__base_row__"] = int(i_more) + 1  # 1-based 行号
+                        row_dict["__base_row__"] = int(i_more) + 1
                         row_dict["__diff_type__"] = DIFF_DELETED
                         row_dict["__changed_fields__"] = []
                         row_dict["__changes_detail__"] = "缺少该项"
@@ -178,7 +173,6 @@ class CrossCompareWorker(QThread):
                 self.progress.emit(100, "完成")
                 self.finished.emit(results)
                 return
-            # 仅对比两表共有键的行：按键列对齐，不按行号，行数不同时只对共有键做差异化
             if self.compare_key_common_only and self.key_cols:
                 keys_for_engine = list(self.key_cols)
             elif self.compare_by_position:
@@ -193,12 +187,10 @@ class CrossCompareWorker(QThread):
             results = []
             for df in other_dfs:
                 compare_cols_i = self.compare_cols or _data_columns(base_df, df)
-                # 行数不同且只比共同项：先按键列取交集并对齐，避免产生新增/删除
                 if self.compare_key_common_only and self.key_cols:
                     keys = list(self.key_cols)
                     key_to_base = _index_by_key(base_df, keys, engine)
                     key_to_other = _index_by_key(df, keys, engine)
-                    # 支持重复键：对每个 key 按出现顺序配对 min(countA,countB)
                     idx_base = []
                     idx_other = []
                     for k in key_to_base:
@@ -387,7 +379,6 @@ class TabCrossCompare(QWidget):
     def _read_columns_only(self, path: str, kw: dict) -> list:
         if not path:
             return []
-        # 优先用只读表头的 API，避免加载全表
         if get_columns_from_file:
             return get_columns_from_file(path, header_rows=kw.get("header_rows"), skip_top_rows=kw.get("skip_top_rows", 0))
         if load_table_from_file:
@@ -490,13 +481,11 @@ class TabCrossCompare(QWidget):
             kw = self._get_header_kwargs_base()
             old_k = self.key_selector.get_selected()
             old_c = self.compare_selector.get_selected()
-            # 基准 + 待对比列名做并集，避免两表列顺序/层级不同导致无法选列（等价于“版本对比”的体验）
             _, cols_base, _ = load_table_from_file(path, **kw)
             cols_union = []
             for c in cols_base:
                 if c not in cols_union:
                     cols_union.append(c)
-            # 读取待对比文件列名（若列表为空则跳过）；使用“待对比表头设置”
             other_paths = [self.others_list.item(i).text() for i in range(self.others_list.count())]
             kw_o = self._get_header_kwargs_other()
             for p in other_paths[:5]:
@@ -558,7 +547,6 @@ class TabCrossCompare(QWidget):
             QMessageBox.warning(self, "提示", "勾选「缺项检测」时请先选择键列。")
             return
         if missing_items_only:
-            # 缺项检测优先：不再按行号/共同项差异对比
             compare_by_position = False
             compare_key_common_only = False
         if compare_key_common_only and not key_cols:

@@ -97,9 +97,8 @@ class TabResults(QWidget):
         layout.addLayout(h)
 
     def set_diff_result(self, diff_result):
-        """展示版本对比/交叉对比的 DiffResult，保证为「数据列 + __diff_type__ + __changed_fields__ + __changes_detail__」（图3样式）。"""
+        """展示 DiffResult。"""
         df = diff_result.to_dataframe()
-        # 强制列顺序：数据列在前 + 差异列；以 df 实际列为准，避免 diff_result.columns 不完整时只显示 3～4 列
         diff_col_names = ("__diff_type__", "__changed_fields__", "__changes_detail__")
         data_cols = [c for c in df.columns if c not in diff_col_names]
         diff_cols = [x for x in diff_col_names if x in df.columns]
@@ -118,7 +117,6 @@ class TabResults(QWidget):
                 f"未变 {getattr(diff_result, 'count_unchanged', 0)} | "
                 f"不匹配合计 {total}"
             )
-            # 追加：问题行号（源文件行号，1-based）
             try:
                 if "__diff_type__" in df.columns and "__source_row__" in df.columns:
                     def _rows_of(t):
