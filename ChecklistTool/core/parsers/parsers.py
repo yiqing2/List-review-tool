@@ -32,6 +32,31 @@ def _detect_header_rows_excel(df_raw: pd.DataFrame, max_rows: int = 10) -> int:
     if df_raw.empty or len(df_raw) < 2:
         return 0
     check = df_raw.head(max_rows)
+    num_re = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+
+    def _is_numeric_like(x: Any) -> bool:
+        if x is None or (isinstance(x, float) and pd.isna(x)):
+            return False
+        s = str(x).strip()
+        if s == "":
+            return False
+        # 允许 0.00E+00 这类科学计数法
+        return bool(num_re.match(s))
+
+    # 优先：找“数据起始行”= 本行大多数非空为数值，且下一行也像数据
+    for start in range(1, len(check) - 1):
+        row = check.iloc[start]
+        row2 = check.iloc[start + 1]
+        non_empty = row.notna() & (row.astype(str).str.strip() != "")
+        non_empty2 = row2.notna() & (row2.astype(str).str.strip() != "")
+        if non_empty.sum() == 0 or non_empty2.sum() == 0:
+            continue
+        numeric_cnt = sum(_is_numeric_like(row.iloc[i]) for i in range(len(row)) if non_empty.iloc[i])
+        numeric_cnt2 = sum(_is_numeric_like(row2.iloc[i]) for i in range(len(row2)) if non_empty2.iloc[i])
+        if numeric_cnt >= max(1, non_empty.sum() // 2) and numeric_cnt2 >= max(1, non_empty2.sum() // 2):
+            return start
+
+    # 回退：仅按“非空占比”判断
     for start in range(1, len(check)):
         # 从 start 行开始当作数据：检查该行及下一行是否像数据（数值/字符串混合，非全空）
         row = check.iloc[start]
@@ -64,6 +89,50 @@ def _flatten_headers(header_rows: pd.DataFrame, fill_empty: str = "") -> List[st
     for c in filled.columns:
         parts.append("|".join(str(filled.iloc[r, c]).strip() or fill_empty for r in range(len(filled))))
     return parts
+
+
+def _simplify_flattened_headers(headers: List[str]) -> List[str]:
+    """
+    对扁平化后的多级列名做“冗余层级”简化，解决如下常见情况：
+    - 顶部一行是整表标题（如 title/标题），下方一行才是实际列名：title|CH1 -> CH1
+    - 顶部空、下一行才是列名：|TIME -> TIME
+
+    注意：若多级表头确实表达了层级含义（如 系统|专业），则保留，不做简化。
+    """
+    if not headers:
+        return []
+    # 统计第一层的分布，用于判断是否“全表统一标题层”
+    first_parts = []
+    split_parts = []
+    first_parts_multilevel = []
+    for h in headers:
+        raw = str(h or "").strip()
+        parts = [p.strip() for p in raw.split("|")]
+        parts = [p for p in parts if p]  # 去掉空层级
+        split_parts.append(parts)
+        first_parts.append(parts[0] if parts else "")
+        if len(parts) >= 2 and parts[0]:
+            first_parts_multilevel.append(parts[0])
+    generic_titles = {"title", "table", "sheet", "标题", "表题", "表名"}
+
+    simplified = []
+    for parts in split_parts:
+        if not parts:
+            simplified.append("")
+            continue
+        # 单层：不处理
+        if len(parts) == 1:
+            simplified.append(parts[0])
+            continue
+        # 多层：若顶层看起来是“整表标题层”（如 title/标题），则去掉
+        if parts and parts[0].strip().lower() in generic_titles:
+            parts = parts[1:] if len(parts) > 1 else parts
+        # 若去掉后仍有多层，保留层级；否则用最后一层
+        if len(parts) >= 2:
+            simplified.append("|".join(parts))
+        else:
+            simplified.append(parts[-1])
+    return simplified
 
 
 def _col_letter_to_index(ref: str) -> int:
@@ -267,6 +336,8 @@ def _read_excel_safe(
         data = raw.iloc[header_rows:].reset_index(drop=True)
         data.columns = range(len(headers))
 
+    headers = _simplify_flattened_headers(headers)
+
     # 列名去重
     seen = {}
     unique_headers = []
@@ -338,6 +409,8 @@ def _read_csv_tsv_safe(
         headers = _flatten_headers(header_df)
         data = raw.iloc[header_rows + 1 :].reset_index(drop=True)
         data.columns = range(len(headers))
+
+    headers = _simplify_flattened_headers(headers)
 
     seen = {}
     unique_headers = []

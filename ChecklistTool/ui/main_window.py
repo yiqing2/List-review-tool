@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-主窗口：登录后根据角色显示界面，集成版本对比、规则校验、交叉对比、规则库、结果报告等选项卡。
+主窗口：集成规则校验、交叉对比、规则库、结果报告等选项卡。
+（已移除“版本对比”界面：两文件对比可通过“交叉对比”添加 1 个待对比文件实现。）
 """
 
 import sys
@@ -25,7 +26,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from features.version_diff import TabVersionDiff
 from features.rule_validate import TabRuleValidate
 from features.cross_compare import TabCrossCompare
 from features.rules_lib import TabRulesLib
@@ -51,10 +51,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("清单对比与校审工具"))
 
         tabs = QTabWidget()
-        tab_diff = TabVersionDiff()
-        tab_diff.result_ready.connect(self._on_diff_result)
-        tabs.addTab(tab_diff, "版本对比")
-
         tab_validate = TabRuleValidate()
         tab_validate.result_ready.connect(self._on_validate_result)
         tabs.addTab(tab_validate, "规则校验")
@@ -73,10 +69,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(tabs)
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("就绪")
-
-    def _on_diff_result(self, result):
-        self._tab_results.set_diff_result(result)
-        self.statusBar().showMessage("版本对比完成，请查看结果报告页")
 
     def _on_validate_result(self, df, violations):
         self._tab_results.set_validation_result(df, violations)

@@ -148,9 +148,16 @@ class DiffEngine:
         if not keys:
             return self._compare_by_position(df_a, df_b, compare_cols, result)
 
-        # 键列匹配
-        key_to_a = {self._row_key(df_a.iloc[i], keys): i for i in range(len(df_a))}
-        key_to_b = {self._row_key(df_b.iloc[i], keys): i for i in range(len(df_b))}
+        # 键列匹配（支持重复键）：key -> [row_indices]
+        def _index_by_key(df: pd.DataFrame, ks: List[str]) -> Dict[tuple, List[int]]:
+            m: Dict[tuple, List[int]] = {}
+            for i in range(len(df)):
+                k = self._row_key(df.iloc[i], ks)
+                m.setdefault(k, []).append(i)
+            return m
+
+        key_to_a = _index_by_key(df_a, keys)
+        key_to_b = _index_by_key(df_b, keys)
 
         # 1) 仅在 B 中有的键 -> added
         # 2) 仅在 A 中有的键 -> deleted
@@ -159,32 +166,53 @@ class DiffEngine:
         only_a = [k for k in key_to_a if k not in key_to_b]
         only_b = [k for k in key_to_b if k not in key_to_a]
 
-        # deleted
+        # deleted（仅在 A 中存在的键：其所有行都为 deleted）
         for k in only_a:
-            i = key_to_a[k]
-            row_dict = df_a.iloc[i].to_dict()
-            row_dict["__diff_type__"] = DIFF_DELETED
-            row_dict["__changed_fields__"] = []
-            row_dict["__changes_detail__"] = ""
-            result.rows.append(row_dict)
-        result.count_deleted = len(only_a)
+            for i in key_to_a.get(k, []):
+                row_dict = df_a.iloc[i].to_dict()
+                row_dict["__diff_type__"] = DIFF_DELETED
+                row_dict["__changed_fields__"] = []
+                row_dict["__changes_detail__"] = ""
+                result.rows.append(row_dict)
+                result.count_deleted += 1
 
-        # added
+        # added（仅在 B 中存在的键：其所有行都为 added）
         for k in only_b:
-            j = key_to_b[k]
-            row_dict = df_b.iloc[j].to_dict()
-            row_dict["__diff_type__"] = DIFF_ADDED
-            row_dict["__changed_fields__"] = []
-            row_dict["__changes_detail__"] = ""
-            result.rows.append(row_dict)
-        result.count_added = len(only_b)
+            for j in key_to_b.get(k, []):
+                row_dict = df_b.iloc[j].to_dict()
+                row_dict["__diff_type__"] = DIFF_ADDED
+                row_dict["__changed_fields__"] = []
+                row_dict["__changes_detail__"] = ""
+                result.rows.append(row_dict)
+                result.count_added += 1
 
-        # 对齐后比较：old_common, new_common 仅含 compare_cols，索引为 common_keys 顺序
+        # 对齐后比较：对每个 common_key，按出现顺序配对 min(lenA, lenB) 行
         if not common_keys:
             return result
 
-        idx_a = [key_to_a[k] for k in common_keys]
-        idx_b = [key_to_b[k] for k in common_keys]
+        idx_a: List[int] = []
+        idx_b: List[int] = []
+        for k in common_keys:
+            la = key_to_a.get(k, [])
+            lb = key_to_b.get(k, [])
+            n_pair = min(len(la), len(lb))
+            idx_a.extend(la[:n_pair])
+            idx_b.extend(lb[:n_pair])
+            # 多出来的视为删除/新增
+            for i in la[n_pair:]:
+                row_dict = df_a.iloc[i].to_dict()
+                row_dict["__diff_type__"] = DIFF_DELETED
+                row_dict["__changed_fields__"] = []
+                row_dict["__changes_detail__"] = ""
+                result.rows.append(row_dict)
+                result.count_deleted += 1
+            for j in lb[n_pair:]:
+                row_dict = df_b.iloc[j].to_dict()
+                row_dict["__diff_type__"] = DIFF_ADDED
+                row_dict["__changed_fields__"] = []
+                row_dict["__changes_detail__"] = ""
+                result.rows.append(row_dict)
+                result.count_added += 1
         old_common = _canonical_df(df_a.iloc[idx_a].reset_index(drop=True), compare_cols)
         new_common = _canonical_df(df_b.iloc[idx_b].reset_index(drop=True), compare_cols)
         old_raw = df_a.iloc[idx_a].reset_index(drop=True)
@@ -195,8 +223,8 @@ class DiffEngine:
         diff_bool = old_common.ne(new_common)
         modified_mask = diff_bool.any(axis=1)
 
-        for pos, k in enumerate(common_keys):
-            j = key_to_b[k]
+        for pos in range(len(idx_b)):
+            j = idx_b[pos]
             row_dict = df_b.iloc[j].to_dict()
             if modified_mask.iloc[pos]:
                 changed = list(diff_bool.iloc[pos].index[diff_bool.iloc[pos]].tolist())

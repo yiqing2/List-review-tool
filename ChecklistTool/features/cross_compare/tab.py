@@ -52,8 +52,10 @@ class CrossCompareWorker(QThread):
         compare_by_position: bool = False,
         compare_key_common_only: bool = False,
         missing_items_only: bool = False,
-        header_rows: Optional[int] = None,
-        skip_top_rows: int = 0,
+        header_rows_base: Optional[int] = None,
+        skip_top_rows_base: int = 0,
+        header_rows_other: Optional[int] = None,
+        skip_top_rows_other: int = 0,
     ):
         super().__init__()
         self.base_path = base_path
@@ -64,30 +66,44 @@ class CrossCompareWorker(QThread):
         self.compare_by_position = compare_by_position
         self.compare_key_common_only = compare_key_common_only
         self.missing_items_only = missing_items_only
-        self.header_rows = header_rows
-        self.skip_top_rows = skip_top_rows
+        self.header_rows_base = header_rows_base
+        self.skip_top_rows_base = skip_top_rows_base
+        self.header_rows_other = header_rows_other
+        self.skip_top_rows_other = skip_top_rows_other
 
     def run(self):
         try:
-            kw = {}
+            kw_base = {}
+            kw_other = {}
             if self.max_rows and self.max_rows > 0:
-                kw["max_rows"] = self.max_rows
-            if self.header_rows is not None and self.header_rows > 0:
-                kw["header_rows"] = self.header_rows
-            if self.skip_top_rows and self.skip_top_rows > 0:
-                kw["skip_top_rows"] = self.skip_top_rows
+                kw_base["max_rows"] = self.max_rows
+                kw_other["max_rows"] = self.max_rows
+            if self.header_rows_base is not None and self.header_rows_base > 0:
+                kw_base["header_rows"] = self.header_rows_base
+            if self.skip_top_rows_base and self.skip_top_rows_base > 0:
+                kw_base["skip_top_rows"] = self.skip_top_rows_base
+            if self.header_rows_other is not None and self.header_rows_other > 0:
+                kw_other["header_rows"] = self.header_rows_other
+            if self.skip_top_rows_other and self.skip_top_rows_other > 0:
+                kw_other["skip_top_rows"] = self.skip_top_rows_other
             self.progress.emit(10, "加载基准表...")
-            base_df, _, _ = load_table_from_file(self.base_path, **kw)
+            base_df, _, _ = load_table_from_file(self.base_path, **kw_base)
             other_dfs = []
             n = len(self.other_paths)
             for i, p in enumerate(self.other_paths):
                 self.progress.emit(20 + 60 * i // max(1, n), f"加载清单 {i+1}/{n}...")
-                df, _, _ = load_table_from_file(p, **kw)
+                df, _, _ = load_table_from_file(p, **kw_other)
                 other_dfs.append(df)
             self.progress.emit(80, "执行交叉对比...")
             # 默认参与对比的列：两表共有且排除内部列，避免只比行号导致“全未变”
             def _data_columns(base, other):
                 return [c for c in base.columns if c in other.columns and c not in ("__row_index__", "__diff_type__", "__changed_fields__")]
+            def _index_by_key(df, keys, engine):
+                m = {}
+                for i in range(len(df)):
+                    k = engine._row_key(df.iloc[i], keys)
+                    m.setdefault(k, []).append(i)
+                return m
             if self.missing_items_only:
                 if not self.key_cols:
                     raise Exception("缺项检测需要先选择键列。")
@@ -105,9 +121,14 @@ class CrossCompareWorker(QThread):
                         less_df, less_path = base_df, self.base_path
 
                     keys = list(self.key_cols)
-                    key_to_more = {engine._row_key(more_df.iloc[i], keys): i for i in range(len(more_df))}
-                    key_to_less = {engine._row_key(less_df.iloc[i], keys): i for i in range(len(less_df))}
-                    missing_keys = [k for k in key_to_more.keys() if k not in key_to_less]
+                    key_to_more = _index_by_key(more_df, keys, engine)
+                    key_to_less = _index_by_key(less_df, keys, engine)
+                    # 缺项按“计数差”处理，支持重复键：more 中出现次数 > less 中出现次数的部分算缺项
+                    missing_rows = []
+                    for k, idxs_more in key_to_more.items():
+                        idxs_less = key_to_less.get(k, [])
+                        if len(idxs_more) > len(idxs_less):
+                            missing_rows.extend(idxs_more[len(idxs_less):])
 
                     res = DiffResult()
                     base_name = os.path.basename(more_path) if more_path else "基准"
@@ -116,9 +137,8 @@ class CrossCompareWorker(QThread):
                     res.columns = list(more_df.columns) + [c for c in extra_cols if c not in more_df.columns]
                     res.key_columns = keys
                     res.compare_columns = []
-                    res.count_deleted = len(missing_keys)
-                    for k in missing_keys:
-                        i_more = key_to_more[k]
+                    res.count_deleted = len(missing_rows)
+                    for i_more in missing_rows:
                         row_dict = more_df.iloc[i_more].to_dict()
                         row_dict["__base_file__"] = base_name
                         row_dict["__missing_in__"] = missing_in_name
@@ -149,11 +169,21 @@ class CrossCompareWorker(QThread):
                 # 行数不同且只比共同项：先按键列取交集并对齐，避免产生新增/删除
                 if self.compare_key_common_only and self.key_cols:
                     keys = list(self.key_cols)
-                    key_to_base = {engine._row_key(base_df.iloc[i], keys): i for i in range(len(base_df))}
-                    key_to_other = {engine._row_key(df.iloc[i], keys): i for i in range(len(df))}
-                    common_keys = [k for k in key_to_base if k in key_to_other]
-                    base_aligned = base_df.iloc[[key_to_base[k] for k in common_keys]].reset_index(drop=True)
-                    other_aligned = df.iloc[[key_to_other[k] for k in common_keys]].reset_index(drop=True)
+                    key_to_base = _index_by_key(base_df, keys, engine)
+                    key_to_other = _index_by_key(df, keys, engine)
+                    # 支持重复键：对每个 key 按出现顺序配对 min(countA,countB)
+                    idx_base = []
+                    idx_other = []
+                    for k in key_to_base:
+                        if k not in key_to_other:
+                            continue
+                        la = key_to_base.get(k, [])
+                        lb = key_to_other.get(k, [])
+                        n_pair = min(len(la), len(lb))
+                        idx_base.extend(la[:n_pair])
+                        idx_other.extend(lb[:n_pair])
+                    base_aligned = base_df.iloc[idx_base].reset_index(drop=True)
+                    other_aligned = df.iloc[idx_other].reset_index(drop=True)
                     res = engine.compare_two_tables(base_aligned, other_aligned, keys=keys, compare_cols=compare_cols_i)
                 else:
                     res = engine.compare_two_tables(base_df, df, keys=keys_for_engine, compare_cols=compare_cols_i)
@@ -205,39 +235,58 @@ class TabCrossCompare(QWidget):
         h_btn.addStretch()
         fl.addLayout(h_btn)
         hdr_row = QHBoxLayout()
-        hdr_row.addWidget(QLabel("表头占用行数："))
-        self.header_rows_spin = QSpinBox()
-        self.header_rows_spin.setRange(0, 10)
-        self.header_rows_spin.setValue(0)
-        self.header_rows_spin.setToolTip(
-            "从文件当前起点起，连续几行合并为列名（不是「第几行是表头」）。\n"
-            "1=仅第1行为表头，数据从第2行起；2=第1～2行合并为表头，数据从第3行起。\n"
-            "0=Excel 自动检测表头行数。"
+        hdr_row.addWidget(QLabel("基准表头占用行数："))
+        self.header_rows_base_spin = QSpinBox()
+        self.header_rows_base_spin.setRange(0, 10)
+        self.header_rows_base_spin.setValue(0)
+        self.header_rows_base_spin.setToolTip(
+            "0=Excel 自动检测表头行数。\n"
+            "1=仅第1行为表头，数据从第2行起；2=第1～2行合并为表头，数据从第3行起。"
         )
-        hdr_row.addWidget(self.header_rows_spin)
-        hdr_row.addWidget(QLabel("跳过顶部行数："))
-        self.skip_top_spin = QSpinBox()
-        self.skip_top_spin.setRange(0, 50)
-        self.skip_top_spin.setValue(0)
-        self.skip_top_spin.setToolTip(
-            "先丢弃文件最上面若干行再识别表头。例如第1行为大标题、第2行才是列名时填 1，"
-            "且「表头占用行数」填 1。"
-        )
-        hdr_row.addWidget(self.skip_top_spin)
+        hdr_row.addWidget(self.header_rows_base_spin)
+        hdr_row.addWidget(QLabel("基准跳过顶部行数："))
+        self.skip_top_base_spin = QSpinBox()
+        self.skip_top_base_spin.setRange(0, 50)
+        self.skip_top_base_spin.setValue(0)
+        self.skip_top_base_spin.setToolTip("例如第1行为大标题、第2行才是列名：跳过=1，表头=1")
+        hdr_row.addWidget(self.skip_top_base_spin)
         btn_refresh_hdr = QPushButton("刷新表头列")
-        btn_refresh_hdr.setToolTip("按当前「表头占用行数」「跳过顶部行数」重新读取基准文件表头，无需重新选文件")
+        btn_refresh_hdr.setToolTip("按当前设置重新读取基准文件表头，无需重新选文件")
         btn_refresh_hdr.clicked.connect(lambda: self._refresh_base_columns(True))
         hdr_row.addWidget(btn_refresh_hdr)
         hdr_row.addStretch()
         fl.addLayout(hdr_row)
+        hdr_other = QHBoxLayout()
+        self.other_same_as_base_cb = QCheckBox("待对比清单表头设置与基准相同")
+        self.other_same_as_base_cb.setChecked(True)
+        self.other_same_as_base_cb.setToolTip("勾选时：待对比清单加载时自动沿用基准的表头参数；取消勾选才可单独设置。")
+        self.other_same_as_base_cb.stateChanged.connect(self._sync_other_header_controls)
+        hdr_other.addWidget(self.other_same_as_base_cb)
+        hdr_other.addWidget(QLabel("待对比表头占用行数："))
+        self.header_rows_other_spin = QSpinBox()
+        self.header_rows_other_spin.setRange(0, 10)
+        self.header_rows_other_spin.setValue(0)
+        self.header_rows_other_spin.setToolTip("0=自动检测；其余含义同上。")
+        hdr_other.addWidget(self.header_rows_other_spin)
+        hdr_other.addWidget(QLabel("待对比跳过顶部行数："))
+        self.skip_top_other_spin = QSpinBox()
+        self.skip_top_other_spin.setRange(0, 50)
+        self.skip_top_other_spin.setValue(0)
+        self.skip_top_other_spin.setToolTip("例如第1行为大标题、第2行才是列名：跳过=1，表头=1")
+        hdr_other.addWidget(self.skip_top_other_spin)
+        hdr_other.addStretch()
+        fl.addLayout(hdr_other)
         fl.addWidget(
             QLabel(
                 "说明：填「2」表示用第1、2行合并成列名，数据从第3行开始——若您本意是「只有第2行是表头」，"
                 "请把「跳过顶部行数」设为 1，「表头占用行数」设为 1。"
             )
         )
-        self.header_rows_spin.valueChanged.connect(lambda _=None: self._refresh_base_columns(False))
-        self.skip_top_spin.valueChanged.connect(lambda _=None: self._refresh_base_columns(False))
+        self.header_rows_base_spin.valueChanged.connect(lambda _=None: self._refresh_base_columns(False))
+        self.skip_top_base_spin.valueChanged.connect(lambda _=None: self._refresh_base_columns(False))
+        self.header_rows_base_spin.valueChanged.connect(lambda _=None: self._sync_other_header_controls())
+        self.skip_top_base_spin.valueChanged.connect(lambda _=None: self._sync_other_header_controls())
+        self._sync_other_header_controls()
         fl.addWidget(QLabel("最大读取行数（仅 Excel，留空自动；若只读到 2 千多行可填如 120000）："))
         self.max_rows_edit = QLineEdit()
         self.max_rows_edit.setPlaceholderText("例如 120000，留空不限制")
@@ -283,8 +332,9 @@ class TabCrossCompare(QWidget):
         if not path or not load_table_from_file:
             return
         try:
-            hr = self.header_rows_spin.value() if self.header_rows_spin.value() > 0 else None
-            sk = int(self.skip_top_spin.value())
+            self._sync_other_header_controls()
+            hr = self.header_rows_base_spin.value() if self.header_rows_base_spin.value() > 0 else None
+            sk = int(self.skip_top_base_spin.value())
             kw = {}
             if hr is not None:
                 kw["header_rows"] = hr
@@ -292,7 +342,30 @@ class TabCrossCompare(QWidget):
                 kw["skip_top_rows"] = sk
             old_k = self.key_selector.get_selected()
             old_c = self.compare_selector.get_selected()
-            _, cols, _ = load_table_from_file(path, **kw)
+            # 基准 + 待对比列名做并集，避免两表列顺序/层级不同导致无法选列（等价于“版本对比”的体验）
+            _, cols_base, _ = load_table_from_file(path, **kw)
+            cols_union = []
+            for c in cols_base:
+                if c not in cols_union:
+                    cols_union.append(c)
+            # 读取待对比文件列名（若列表为空则跳过）；使用“待对比表头设置”
+            other_paths = [self.others_list.item(i).text() for i in range(self.others_list.count())]
+            hr_o = self.header_rows_other_spin.value() if self.header_rows_other_spin.value() > 0 else None
+            sk_o = int(self.skip_top_other_spin.value())
+            kw_o = {}
+            if hr_o is not None:
+                kw_o["header_rows"] = hr_o
+            if sk_o > 0:
+                kw_o["skip_top_rows"] = sk_o
+            for p in other_paths[:5]:
+                try:
+                    _, cols_o, _ = load_table_from_file(p, **kw_o)
+                    for c in cols_o:
+                        if c not in cols_union:
+                            cols_union.append(c)
+                except Exception:
+                    continue
+            cols = cols_union
             self._columns = cols
             self.key_selector.set_columns(cols)
             self.compare_selector.set_columns(cols)
@@ -351,8 +424,11 @@ class TabCrossCompare(QWidget):
             return
         if compare_key_common_only and compare_by_position:
             compare_by_position = False
-        header_rows = self.header_rows_spin.value() if self.header_rows_spin.value() > 0 else None
-        skip_top_rows = int(self.skip_top_spin.value())
+        self._sync_other_header_controls()
+        header_rows_base = self.header_rows_base_spin.value() if self.header_rows_base_spin.value() > 0 else None
+        skip_top_rows_base = int(self.skip_top_base_spin.value())
+        header_rows_other = self.header_rows_other_spin.value() if self.header_rows_other_spin.value() > 0 else None
+        skip_top_rows_other = int(self.skip_top_other_spin.value())
         max_rows = 0
         try:
             t = self.max_rows_edit.text().strip()
@@ -370,8 +446,10 @@ class TabCrossCompare(QWidget):
             compare_by_position=compare_by_position,
             compare_key_common_only=compare_key_common_only,
             missing_items_only=missing_items_only,
-            header_rows=header_rows,
-            skip_top_rows=skip_top_rows,
+            header_rows_base=header_rows_base,
+            skip_top_rows_base=skip_top_rows_base,
+            header_rows_other=header_rows_other,
+            skip_top_rows_other=skip_top_rows_other,
         )
         self._worker.progress.connect(self.progress.set_progress)
         self._worker.finished.connect(self._on_finished)
@@ -385,3 +463,20 @@ class TabCrossCompare(QWidget):
     def _on_error(self, err: str):
         self.progress.set_idle("出错")
         QMessageBox.critical(self, "错误", err)
+
+    def _sync_other_header_controls(self):
+        """默认让待对比清单沿用基准；只有取消勾选时才允许单独设置。"""
+        same = bool(self.other_same_as_base_cb.isChecked()) if hasattr(self, "other_same_as_base_cb") else False
+        if same:
+            if hasattr(self, "header_rows_other_spin") and hasattr(self, "header_rows_base_spin"):
+                self.header_rows_other_spin.blockSignals(True)
+                self.header_rows_other_spin.setValue(self.header_rows_base_spin.value())
+                self.header_rows_other_spin.blockSignals(False)
+            if hasattr(self, "skip_top_other_spin") and hasattr(self, "skip_top_base_spin"):
+                self.skip_top_other_spin.blockSignals(True)
+                self.skip_top_other_spin.setValue(self.skip_top_base_spin.value())
+                self.skip_top_other_spin.blockSignals(False)
+        if hasattr(self, "header_rows_other_spin"):
+            self.header_rows_other_spin.setEnabled(not same)
+        if hasattr(self, "skip_top_other_spin"):
+            self.skip_top_other_spin.setEnabled(not same)
