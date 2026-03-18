@@ -9,7 +9,7 @@ ChecklistTool/
 ├── main.py                 # 程序入口
 ├── config/                 # 配置
 │   ├── __init__.py
-│   └── app_config.py       # 路径、角色、常量等
+│   └── app_config.py       # 路径、常量、规则库编辑秘钥等
 ├── core/                   # 核心逻辑（按子包划分）
 │   ├── __init__.py         # 统一导出
 │   ├── diff/               # 对比引擎（版本对比、交叉对比共用）
@@ -53,7 +53,7 @@ ChecklistTool/
 - **功能页**：`from features.xxx import TabXxx`
 - **核心逻辑**：`from core.parsers import ...`、`from core.diff import ...`、`from core.rules import ...`、`from core.export import ...`
 - **配置**：`from config import ...`
-- **公共 UI**：`from ui.widgets import ...`、`from ui.login_dialog import ...`
+- **公共 UI**：`from ui.widgets import ...`
 
 ## 扩展新功能
 

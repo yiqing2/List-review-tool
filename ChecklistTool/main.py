@@ -8,7 +8,7 @@ Checklist Comparison & Validation Tool - Entry point.
   - 基于用户自定义规则的清单数据正确性校验（树形条件，管理员维护规则库）
   - 多清单交叉对比（如设计清单与采购清单）
   - 结果导出：PDF（带格式）、Excel（含标记与高亮）、CSV（纯数据）
-  - 用户角色：业内人员（上传/配置/执行/查看）、管理员（规则库编辑）
+  - 规则库编辑：需要输入秘钥解锁编辑功能
 
 运行方式：python main.py
 日志与崩溃信息会写入 user_data/logs/app.log，便于排查问题。
@@ -72,8 +72,6 @@ def main():
     try:
         from ui.main_window import MainWindow
         win = MainWindow()
-        if win._role is None:
-            sys.exit(0)
         win.show()
         sys.exit(app.exec())
     except Exception as e:

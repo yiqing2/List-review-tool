@@ -25,12 +25,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-try:
-    from config import ROLE_ADMIN
-except ImportError:
-    ROLE_ADMIN = "admin"
-
-from ui.login_dialog import LoginDialog
 from features.version_diff import TabVersionDiff
 from features.rule_validate import TabRuleValidate
 from features.cross_compare import TabCrossCompare
@@ -46,28 +40,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("清单对比与校审工具")
         self.setMinimumSize(900, 650)
         self.resize(1000, 700)
-        self._role = None
-        self._user_name = None
         self._tab_results = None
         self._tab_rules = None
-        if not self._do_login():
-            return
         self._setup_ui()
-
-    def _do_login(self) -> bool:
-        dlg = LoginDialog(self)
-        from PyQt6.QtWidgets import QDialog
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return False
-        self._role = dlg.role()
-        self._user_name = dlg.user_name()
-        return True
 
     def _setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.addWidget(QLabel(f"当前用户：{self._user_name} | 角色：{'管理员' if self._role == ROLE_ADMIN else '业内人员'}"))
+        layout.addWidget(QLabel("清单对比与校审工具"))
 
         tabs = QTabWidget()
         tab_diff = TabVersionDiff()
@@ -82,7 +63,7 @@ class MainWindow(QMainWindow):
         tab_cross.result_ready.connect(self._on_cross_result)
         tabs.addTab(tab_cross, "交叉对比")
 
-        self._tab_rules = TabRulesLib(is_admin=(self._role == ROLE_ADMIN))
+        self._tab_rules = TabRulesLib()
         self._tab_rules.rules_updated.connect(tab_validate.refresh_rules_list)
         tabs.addTab(self._tab_rules, "规则库")
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-规则库管理页：管理员可添加/编辑/删除规则（可视化条件树）；普通用户仅可查看与选择。
+规则库管理页：默认只读；需要输入秘钥解锁编辑（添加/编辑/删除规则）。
 """
 
 from PyQt6.QtWidgets import (
@@ -22,7 +22,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 
 from features.rules_lib.rule_tree_editor import RuleTreeEditor
 from core.rules import RuleEngine, ValidationRule, RuleNode
-from ui.widgets import FilePathRow, ColumnSelector
+from ui.widgets import FilePathRow
 
 try:
     from core.parsers import load_table_from_file
@@ -30,20 +30,22 @@ except ImportError:
     load_table_from_file = None
 
 try:
-    from config import ROLE_ADMIN
-except ImportError:
-    ROLE_ADMIN = "admin"
+    from config.app_config import get_rules_edit_key, DEFAULT_RULES_EDIT_KEY
+except Exception:
+    def get_rules_edit_key() -> str:
+        return "admin"
+    DEFAULT_RULES_EDIT_KEY = "admin"
 
 
 class TabRulesLib(QWidget):
-    """规则库：列表 + 详情（条件树 + 说明）。管理员可编辑。"""
+    """规则库：列表 + 详情（条件树 + 说明）。默认只读，秘钥解锁编辑。"""
     rules_updated = pyqtSignal()
 
-    def __init__(self, is_admin: bool, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.is_admin = is_admin
         self._engine = RuleEngine()
         self._current_rule_id = None
+        self._edit_unlocked = False
         self._setup_ui()
         self._load_rules()
 
@@ -84,35 +86,73 @@ class TabRulesLib(QWidget):
         self.sample_file.path_changed.connect(self._on_sample_file_selected)
         right_layout.addWidget(self.sample_file)
         self.desc_edit = QTextEdit()
-        self.desc_edit.setPlaceholderText("规则说明（仅管理员可编辑）")
+        self.desc_edit.setPlaceholderText("规则说明（解锁编辑后可修改）")
         self.desc_edit.setMaximumHeight(80)
         right_layout.addWidget(self.desc_edit)
-        right_layout.addWidget(QLabel("选择要校验/高亮的表头列（可多选；不确定第几列时用这里）："))
-        self.target_cols_selector = ColumnSelector()
-        self.target_cols_selector.set_columns([])
-        right_layout.addWidget(self.target_cols_selector)
-        right_layout.addWidget(QLabel("手动补充表头/列序号（逗号分隔；例如 TIME,CH2 或 2,4；空=仅使用上方选择）："))
-        self.target_cols_edit = QLineEdit()
-        self.target_cols_edit.setPlaceholderText("例如：TIME,CH2 或 2,4")
-        right_layout.addWidget(self.target_cols_edit)
         self.tree_editor = RuleTreeEditor(columns=[])
         right_layout.addWidget(self.tree_editor)
-        if self.is_admin:
-            btn_add = QPushButton("新增规则")
-            btn_add.clicked.connect(self._add_rule)
-            btn_save = QPushButton("保存当前规则")
-            btn_save.clicked.connect(self._save_rule)
-            btn_del = QPushButton("删除当前规则")
-            btn_del.clicked.connect(self._del_rule)
-            h = QHBoxLayout()
-            h.addWidget(btn_add)
-            h.addWidget(btn_save)
-            h.addWidget(btn_del)
-            right_layout.addLayout(h)
-        else:
-            right_layout.addWidget(QLabel("（仅管理员可修改规则库）"))
+
+        self.btn_unlock = QPushButton("解锁编辑（需秘钥）")
+        self.btn_unlock.clicked.connect(self._toggle_unlock)
+        right_layout.addWidget(self.btn_unlock)
+
+        self.btn_add = QPushButton("新增规则")
+        self.btn_add.clicked.connect(self._add_rule)
+        self.btn_save = QPushButton("保存当前规则")
+        self.btn_save.clicked.connect(self._save_rule)
+        self.btn_del = QPushButton("删除当前规则")
+        self.btn_del.clicked.connect(self._del_rule)
+        h = QHBoxLayout()
+        h.addWidget(self.btn_add)
+        h.addWidget(self.btn_save)
+        h.addWidget(self.btn_del)
+        right_layout.addLayout(h)
+
+        self._apply_edit_lock()
         split.addWidget(right)
         layout.addWidget(split)
+
+    def _apply_edit_lock(self):
+        """根据解锁状态启用/禁用编辑控件。"""
+        unlocked = bool(self._edit_unlocked)
+        self.desc_edit.setReadOnly(not unlocked)
+        # 条件树始终可查看/展开；仅在未解锁时禁用“添加/编辑/删除”等修改入口
+        self.tree_editor.setEnabled(True)
+        if hasattr(self.tree_editor, "set_editable"):
+            self.tree_editor.set_editable(unlocked)
+        self.btn_add.setEnabled(unlocked)
+        self.btn_save.setEnabled(unlocked)
+        self.btn_del.setEnabled(unlocked)
+        self.btn_unlock.setText("锁定编辑" if unlocked else "解锁编辑（需秘钥）")
+
+    def _toggle_unlock(self):
+        if self._edit_unlocked:
+            self._edit_unlocked = False
+            self._apply_edit_lock()
+            return
+        key, ok = QInputDialog.getText(
+            self,
+            "解锁规则库编辑",
+            "请输入秘钥：",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return
+        expected = get_rules_edit_key()
+        if not expected or expected.strip() == "":
+            QMessageBox.warning(self, "提示", "未配置规则库编辑秘钥。请设置环境变量后重启程序。")
+            return
+        if key.strip() != expected:
+            QMessageBox.warning(self, "提示", "秘钥错误，无法解锁编辑。")
+            return
+        self._edit_unlocked = True
+        self._apply_edit_lock()
+        if expected == DEFAULT_RULES_EDIT_KEY:
+            QMessageBox.information(
+                self,
+                "提示",
+                "你正在使用默认秘钥 admin。\n建议通过环境变量 CHECKLISTTOOL_RULES_EDIT_KEY 设置为你自己的秘钥。",
+            )
 
     def _load_rules(self):
         """从文件重新加载规则并刷新列表。"""
@@ -137,25 +177,14 @@ class TabRulesLib(QWidget):
             if r.rule_id == rule_id:
                 self._current_rule_id = rule_id
                 self.desc_edit.setPlainText(r.description or "")
-                # target_columns 优先填充选择器（命中列名），其余保留在手动输入框中
-                saved = [x for x in (r.target_columns or []) if str(x).strip()]
-                cols = list(getattr(self.tree_editor, "columns", []) or [])
-                selected = [x for x in saved if x in cols]
-                extra = [x for x in saved if x not in cols]
-                self.target_cols_selector.set_columns(cols)
-                for x in selected:
-                    # 将已选列移入右侧“已选列”
-                    for i in range(self.target_cols_selector.available.count()):
-                        it = self.target_cols_selector.available.item(i)
-                        if it and it.text() == x:
-                            it.setSelected(True)
-                    self.target_cols_selector._add()
-                self.target_cols_edit.setText(",".join(extra))
                 self.tree_editor.load_node(r.root)
                 return
         self._current_rule_id = None
 
     def _add_rule(self):
+        if not self._edit_unlocked:
+            QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
+            return
         name, ok = QInputDialog.getText(self, "新增规则", "规则名称：")
         if not ok or not name.strip():
             return
@@ -183,6 +212,9 @@ class TabRulesLib(QWidget):
         QMessageBox.information(self, "提示", "已添加规则，请编辑条件树后点击“保存当前规则”。")
 
     def _save_rule(self):
+        if not self._edit_unlocked:
+            QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
+            return
         if not self._current_rule_id:
             QMessageBox.warning(self, "提示", "请先选择一条规则。")
             return
@@ -190,15 +222,6 @@ class TabRulesLib(QWidget):
             if r.rule_id == self._current_rule_id:
                 r.description = self.desc_edit.toPlainText().strip()
                 r.root = self.tree_editor.get_root_node()
-                # 作用列（用于违规高亮），支持列名或列序号（1-based）
-                selected = self.target_cols_selector.get_selected() if hasattr(self, "target_cols_selector") else []
-                raw = self.target_cols_edit.text().strip()
-                extras = [x.strip() for x in raw.split(",") if x.strip()] if raw else []
-                merged = []
-                for x in list(selected) + list(extras):
-                    if x not in merged:
-                        merged.append(x)
-                r.target_columns = merged
                 self._engine.save_rules()
                 self.rules_updated.emit()
                 self._path_label.setText("规则库保存位置：" + (self._engine.rules_file or "—"))
@@ -207,6 +230,9 @@ class TabRulesLib(QWidget):
         QMessageBox.warning(self, "提示", "未找到当前规则。")
 
     def _del_rule(self):
+        if not self._edit_unlocked:
+            QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
+            return
         if not self._current_rule_id:
             QMessageBox.warning(self, "提示", "请先选择一条规则。")
             return
@@ -222,8 +248,6 @@ class TabRulesLib(QWidget):
     def set_columns_for_editor(self, columns: list):
         """从外部传入当前文件的列名，供条件树选择字段。"""
         self.tree_editor.set_columns(columns or [])
-        if hasattr(self, "target_cols_selector"):
-            self.target_cols_selector.set_columns(columns or [])
 
     def _on_sample_file_selected(self, path: str):
         if not path or not load_table_from_file:

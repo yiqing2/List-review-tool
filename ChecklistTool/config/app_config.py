@@ -42,11 +42,19 @@ SUPPORTED_EXTENSIONS = (".xlsx", ".xls", ".csv", ".tsv", ".docx", ".et")
 # 注：.et 若需支持，可后续接入转换或专用库
 
 # -----------------------------------------------------------------------------
-# 用户角色常量
+# 规则库编辑秘钥（用于解锁“规则库”编辑功能）
 # -----------------------------------------------------------------------------
-ROLE_ADMIN = "admin"
-ROLE_USER = "user"
-ROLES = (ROLE_ADMIN, ROLE_USER)
+# 建议通过环境变量配置，不要把真实秘钥写进仓库。
+# Windows PowerShell 示例：
+#   $env:CHECKLISTTOOL_RULES_EDIT_KEY="你的秘钥"
+RULES_EDIT_KEY_ENV = "CHECKLISTTOOL_RULES_EDIT_KEY"
+# 若未配置环境变量时的默认秘钥（仅用于开发演示；生产环境请务必修改）
+DEFAULT_RULES_EDIT_KEY = "admin"
+
+
+def get_rules_edit_key() -> str:
+    """获取规则库编辑秘钥（优先环境变量，其次默认值）。"""
+    return (os.environ.get(RULES_EDIT_KEY_ENV) or DEFAULT_RULES_EDIT_KEY).strip()
 
 # -----------------------------------------------------------------------------
 # 差异类型（用于导出高亮）
@@ -65,7 +73,7 @@ RULES_DB_FILE = os.path.join(RULES_DIR, "rules_db.json")
 def get_rules_fallback_path() -> str:
     """规则库在项目目录不可写时使用的用户目录路径（便于长期保存）。"""
     return os.path.join(os.path.expanduser("~"), "清单对比校审工具", "rules", "rules_db.json")
-# 当前登录用户信息（简单实现，可后续改为数据库）
+# 兼容旧版本：曾使用 current_user.json 记录角色；现在不再使用角色控制权限
 CURRENT_USER_FILE = os.path.join(USER_DATA_DIR, "current_user.json")
 
 # -----------------------------------------------------------------------------
