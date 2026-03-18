@@ -6,6 +6,7 @@
 import traceback
 import os
 from typing import Optional
+import re
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -26,11 +27,12 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from ui.widgets import FilePathRow, ColumnSelector, ProgressWidget
 
 try:
-    from core.parsers import load_table_from_file, ParserError
+    from core.parsers import load_table_from_file, get_columns_from_file, ParserError
     from core.diff import DiffEngine, DiffResult
     from config import DIFF_DELETED
 except ImportError:
     load_table_from_file = None
+    get_columns_from_file = None
     ParserError = Exception
     DiffEngine = None
     DiffResult = None
@@ -56,6 +58,7 @@ class CrossCompareWorker(QThread):
         skip_top_rows_base: int = 0,
         header_rows_other: Optional[int] = None,
         skip_top_rows_other: int = 0,
+        strip_unit_prefix_in_keys: bool = False,
     ):
         super().__init__()
         self.base_path = base_path
@@ -70,6 +73,7 @@ class CrossCompareWorker(QThread):
         self.skip_top_rows_base = skip_top_rows_base
         self.header_rows_other = header_rows_other
         self.skip_top_rows_other = skip_top_rows_other
+        self.strip_unit_prefix_in_keys = strip_unit_prefix_in_keys
 
     def run(self):
         try:
@@ -95,9 +99,30 @@ class CrossCompareWorker(QThread):
                 df, _, _ = load_table_from_file(p, **kw_other)
                 other_dfs.append(df)
             self.progress.emit(80, "执行交叉对比...")
-            # 默认参与对比的列：两表共有且排除内部列，避免只比行号导致“全未变”
+            if self.strip_unit_prefix_in_keys and self.key_cols:
+                pat = re.compile(r"^\s*(\d{1,2})(?:\s*(?:#|＃|号|机组))?\s*[-_./\s]*")
+
+                def _strip(v):
+                    if v is None:
+                        return v
+                    s = str(v).strip()
+                    if not s:
+                        return s
+                    return pat.sub("", s, count=1).strip()
+
+                def _apply(df):
+                    if df is None or df.empty:
+                        return df
+                    out = df.copy()
+                    for c in self.key_cols:
+                        if c in out.columns:
+                            out[c] = out[c].map(_strip)
+                    return out
+
+                base_df = _apply(base_df)
+                other_dfs = [_apply(df) for df in other_dfs]
             def _data_columns(base, other):
-                return [c for c in base.columns if c in other.columns and c not in ("__row_index__", "__diff_type__", "__changed_fields__")]
+                return [c for c in base.columns if c in other.columns and c not in ("__row_index__", "__source_row__", "__diff_type__", "__changed_fields__")]
             def _index_by_key(df, keys, engine):
                 m = {}
                 for i in range(len(df)):
@@ -107,12 +132,10 @@ class CrossCompareWorker(QThread):
             if self.missing_items_only:
                 if not self.key_cols:
                     raise Exception("缺项检测需要先选择键列。")
-                # 只输出“少了哪一项”：以两表中行数更多的为基准，找出另一表缺少的键，并标注基准行号
                 engine = DiffEngine(key_columns=list(self.key_cols), compare_columns=[])
                 results = []
                 for idx, df in enumerate(other_dfs):
                     p_other = self.other_paths[idx] if idx < len(self.other_paths) else ""
-                    # 以行数更多的文件为基准
                     if len(base_df) >= len(df):
                         more_df, more_path = base_df, self.base_path
                         less_df, less_path = df, p_other
@@ -123,7 +146,6 @@ class CrossCompareWorker(QThread):
                     keys = list(self.key_cols)
                     key_to_more = _index_by_key(more_df, keys, engine)
                     key_to_less = _index_by_key(less_df, keys, engine)
-                    # 缺项按“计数差”处理，支持重复键：more 中出现次数 > less 中出现次数的部分算缺项
                     missing_rows = []
                     for k, idxs_more in key_to_more.items():
                         idxs_less = key_to_less.get(k, [])
@@ -142,7 +164,7 @@ class CrossCompareWorker(QThread):
                         row_dict = more_df.iloc[i_more].to_dict()
                         row_dict["__base_file__"] = base_name
                         row_dict["__missing_in__"] = missing_in_name
-                        row_dict["__base_row__"] = int(i_more) + 1  # 1-based 行号
+                        row_dict["__base_row__"] = int(i_more) + 1
                         row_dict["__diff_type__"] = DIFF_DELETED
                         row_dict["__changed_fields__"] = []
                         row_dict["__changes_detail__"] = "缺少该项"
@@ -151,7 +173,6 @@ class CrossCompareWorker(QThread):
                 self.progress.emit(100, "完成")
                 self.finished.emit(results)
                 return
-            # 仅对比两表共有键的行：按键列对齐，不按行号，行数不同时只对共有键做差异化
             if self.compare_key_common_only and self.key_cols:
                 keys_for_engine = list(self.key_cols)
             elif self.compare_by_position:
@@ -166,12 +187,10 @@ class CrossCompareWorker(QThread):
             results = []
             for df in other_dfs:
                 compare_cols_i = self.compare_cols or _data_columns(base_df, df)
-                # 行数不同且只比共同项：先按键列取交集并对齐，避免产生新增/删除
                 if self.compare_key_common_only and self.key_cols:
                     keys = list(self.key_cols)
                     key_to_base = _index_by_key(base_df, keys, engine)
                     key_to_other = _index_by_key(df, keys, engine)
-                    # 支持重复键：对每个 key 按出现顺序配对 min(countA,countB)
                     idx_base = []
                     idx_other = []
                     for k in key_to_base:
@@ -254,6 +273,10 @@ class TabCrossCompare(QWidget):
         btn_refresh_hdr.setToolTip("按当前设置重新读取基准文件表头，无需重新选文件")
         btn_refresh_hdr.clicked.connect(lambda: self._refresh_base_columns(True))
         hdr_row.addWidget(btn_refresh_hdr)
+        btn_check_hdr = QPushButton("表头一致性检查")
+        btn_check_hdr.setToolTip("检查基准与待对比文件的表头列名是否一致，并输出不一致项")
+        btn_check_hdr.clicked.connect(self._check_headers_consistency)
+        hdr_row.addWidget(btn_check_hdr)
         hdr_row.addStretch()
         fl.addLayout(hdr_row)
         hdr_other = QHBoxLayout()
@@ -295,6 +318,12 @@ class TabCrossCompare(QWidget):
 
         g_cols = QGroupBox("键列与对比列")
         fl2 = QVBoxLayout(g_cols)
+        self.strip_unit_prefix_cb = QCheckBox("键列去除机组号前缀（1~2 位数字）后再匹配对比")
+        self.strip_unit_prefix_cb.setToolTip(
+            "用于两张表键列仅机组号不同的场景。\n"
+            "示例：01-ABC123 与 02-ABC123，会先去掉 01/02 再按 ABC123 匹配。"
+        )
+        fl2.addWidget(self.strip_unit_prefix_cb)
         self.missing_items_only_cb = QCheckBox("缺项检测（以行数更多的文件为基准，找出另一份缺少的项并标注基准行号）")
         self.missing_items_only_cb.setToolTip("勾选后将只输出“少了哪一项”，不做逐列差异对比；需要先选择键列。")
         fl2.addWidget(self.missing_items_only_cb)
@@ -327,36 +356,138 @@ class TabCrossCompare(QWidget):
     def _on_base_selected(self, path: str):
         self._refresh_base_columns(False)
 
+    def _get_header_kwargs_base(self) -> dict:
+        hr = self.header_rows_base_spin.value() if self.header_rows_base_spin.value() > 0 else None
+        sk = int(self.skip_top_base_spin.value())
+        kw = {}
+        if hr is not None:
+            kw["header_rows"] = hr
+        if sk > 0:
+            kw["skip_top_rows"] = sk
+        return kw
+
+    def _get_header_kwargs_other(self) -> dict:
+        hr = self.header_rows_other_spin.value() if self.header_rows_other_spin.value() > 0 else None
+        sk = int(self.skip_top_other_spin.value())
+        kw = {}
+        if hr is not None:
+            kw["header_rows"] = hr
+        if sk > 0:
+            kw["skip_top_rows"] = sk
+        return kw
+
+    def _read_columns_only(self, path: str, kw: dict) -> list:
+        if not path:
+            return []
+        if get_columns_from_file:
+            return get_columns_from_file(path, header_rows=kw.get("header_rows"), skip_top_rows=kw.get("skip_top_rows", 0))
+        if load_table_from_file:
+            _, cols, _ = load_table_from_file(path, **kw)
+            return cols or []
+        return []
+
+    def _check_headers_consistency(self):
+        base_path = self.base_file.path()
+        if not base_path:
+            QMessageBox.warning(self, "提示", "请先选择基准清单。")
+            return
+        other_paths = [self.others_list.item(i).text() for i in range(self.others_list.count())]
+        if not other_paths:
+            QMessageBox.warning(self, "提示", "请至少添加一个待对比清单。")
+            return
+
+        self._sync_other_header_controls()
+        kw_base = self._get_header_kwargs_base()
+        kw_other = self._get_header_kwargs_other()
+
+        try:
+            cols_base = self._read_columns_only(base_path, kw_base)
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"读取基准表头失败：{e}")
+            return
+
+        def _norm(s: str) -> str:
+            s = "" if s is None else str(s)
+            s = s.strip().lower()
+            s = re.sub(r"\s+", "", s)
+            return s
+
+        base_set = set(cols_base or [])
+        base_norm = {_norm(c): c for c in cols_base or [] if str(c).strip()}
+
+        blocks = []
+        ok_all = True
+        for p in other_paths:
+            try:
+                cols_o = self._read_columns_only(p, kw_other)
+            except Exception as e:
+                ok_all = False
+                blocks.append(f"文件：{os.path.basename(p)}\n- 读取表头失败：{e}")
+                continue
+
+            other_set = set(cols_o or [])
+            missing = [c for c in cols_base if c not in other_set]
+            extra = [c for c in cols_o if c not in base_set]
+
+            # 可能只是文本差异：按归一化映射猜测对应
+            other_norm = {_norm(c): c for c in cols_o or [] if str(c).strip()}
+            maybe_same = []
+            for c in missing:
+                k = _norm(c)
+                if k and k in other_norm:
+                    maybe_same.append((c, other_norm[k]))
+
+            if not missing and not extra:
+                blocks.append(f"文件：{os.path.basename(p)}\n- 表头一致")
+                continue
+
+            ok_all = False
+            lines = [f"文件：{os.path.basename(p)}"]
+            if maybe_same:
+                lines.append("- 可能仅是空格/大小写等文本差异：")
+                for a, b in maybe_same[:30]:
+                    lines.append(f"  - 基准：{a}  <->  待对比：{b}")
+            if missing:
+                lines.append(f"- 基准有但待对比没有：{len(missing)}")
+                for c in missing[:80]:
+                    lines.append(f"  - {c}")
+                if len(missing) > 80:
+                    lines.append("  - ...")
+            if extra:
+                lines.append(f"- 待对比有但基准没有：{len(extra)}")
+                for c in extra[:80]:
+                    lines.append(f"  - {c}")
+                if len(extra) > 80:
+                    lines.append("  - ...")
+            blocks.append("\n".join(lines))
+
+        if ok_all:
+            QMessageBox.information(self, "表头一致性检查", "基准与所有待对比文件的表头列名一致。")
+            return
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("表头一致性检查")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText("检测到表头不一致。可在“详情”中查看每个文件的差异。")
+        msg.setDetailedText("\n\n".join(blocks))
+        msg.exec()
+
     def _refresh_base_columns(self, show_ok: bool):
         path = self.base_file.path()
         if not path or not load_table_from_file:
             return
         try:
             self._sync_other_header_controls()
-            hr = self.header_rows_base_spin.value() if self.header_rows_base_spin.value() > 0 else None
-            sk = int(self.skip_top_base_spin.value())
-            kw = {}
-            if hr is not None:
-                kw["header_rows"] = hr
-            if sk > 0:
-                kw["skip_top_rows"] = sk
+            kw = self._get_header_kwargs_base()
             old_k = self.key_selector.get_selected()
             old_c = self.compare_selector.get_selected()
-            # 基准 + 待对比列名做并集，避免两表列顺序/层级不同导致无法选列（等价于“版本对比”的体验）
             _, cols_base, _ = load_table_from_file(path, **kw)
             cols_union = []
             for c in cols_base:
                 if c not in cols_union:
                     cols_union.append(c)
-            # 读取待对比文件列名（若列表为空则跳过）；使用“待对比表头设置”
             other_paths = [self.others_list.item(i).text() for i in range(self.others_list.count())]
-            hr_o = self.header_rows_other_spin.value() if self.header_rows_other_spin.value() > 0 else None
-            sk_o = int(self.skip_top_other_spin.value())
-            kw_o = {}
-            if hr_o is not None:
-                kw_o["header_rows"] = hr_o
-            if sk_o > 0:
-                kw_o["skip_top_rows"] = sk_o
+            kw_o = self._get_header_kwargs_other()
             for p in other_paths[:5]:
                 try:
                     _, cols_o, _ = load_table_from_file(p, **kw_o)
@@ -416,7 +547,6 @@ class TabCrossCompare(QWidget):
             QMessageBox.warning(self, "提示", "勾选「缺项检测」时请先选择键列。")
             return
         if missing_items_only:
-            # 缺项检测优先：不再按行号/共同项差异对比
             compare_by_position = False
             compare_key_common_only = False
         if compare_key_common_only and not key_cols:
@@ -429,6 +559,7 @@ class TabCrossCompare(QWidget):
         skip_top_rows_base = int(self.skip_top_base_spin.value())
         header_rows_other = self.header_rows_other_spin.value() if self.header_rows_other_spin.value() > 0 else None
         skip_top_rows_other = int(self.skip_top_other_spin.value())
+        strip_unit = bool(self.strip_unit_prefix_cb.isChecked()) if hasattr(self, "strip_unit_prefix_cb") else False
         max_rows = 0
         try:
             t = self.max_rows_edit.text().strip()
@@ -450,6 +581,7 @@ class TabCrossCompare(QWidget):
             skip_top_rows_base=skip_top_rows_base,
             header_rows_other=header_rows_other,
             skip_top_rows_other=skip_top_rows_other,
+            strip_unit_prefix_in_keys=strip_unit,
         )
         self._worker.progress.connect(self.progress.set_progress)
         self._worker.finished.connect(self._on_finished)

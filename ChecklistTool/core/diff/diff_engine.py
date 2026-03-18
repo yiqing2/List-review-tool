@@ -17,7 +17,6 @@ except ImportError:
     DIFF_MODIFIED = "modified"
     DIFF_UNCHANGED = "unchanged"
 
-# 数值比较容差；数值统一格式化为最多有效位数，避免 1.06E-03 与 0.00106 等判为不同
 NUMERIC_TOLERANCE = 1e-9
 NUMERIC_FORMAT = "%.10g"
 
@@ -133,7 +132,7 @@ class DiffEngine:
         if not compare_cols:
             compare_cols = [
                 c for c in all_cols
-                if c not in ("__diff_type__", "__changed_fields__", "__row_index__")
+                if c not in ("__diff_type__", "__changed_fields__", "__row_index__", "__source_row__")
                 and c in df_b.columns and c in df_a.columns
             ]
 

@@ -10,9 +10,6 @@ import re
 from typing import List, Tuple, Optional, Any
 import pandas as pd
 
-# -----------------------------------------------------------------------------
-# 异常定义：便于上层统一捕获
-# -----------------------------------------------------------------------------
 class ParserError(Exception):
     """解析过程发生的错误（文件损坏、格式不支持等）。"""
     pass
@@ -330,11 +327,13 @@ def _read_excel_safe(
         headers = [str(c).strip() for c in raw.iloc[0].tolist()]
         data = raw.iloc[1:].reset_index(drop=True)
         data.columns = range(len(headers))
+        data_start_row_1based = st + 2  # 原文件行号（1-based）：跳过 st 行 + 1 行表头
     else:
         header_df = raw.iloc[:header_rows]
         headers = _flatten_headers(header_df)
         data = raw.iloc[header_rows:].reset_index(drop=True)
         data.columns = range(len(headers))
+        data_start_row_1based = st + header_rows + 1  # 跳过 st 行 + header_rows 行表头
 
     headers = _simplify_flattened_headers(headers)
 
@@ -350,6 +349,10 @@ def _read_excel_safe(
             seen[h] = 0
             unique_headers.append(h)
     data.columns = unique_headers
+
+    # 源文件行号（1-based）：用于结果汇总定位问题行
+    data["__source_row__"] = [int(data_start_row_1based) + i for i in range(len(data))]
+    unique_headers = list(unique_headers) + ["__source_row__"]
 
     # 只要指定了 max_rows 就加 __row_index__，避免键列重复（如 TIME 全空或相同）时多行被合并成 1 行
     if max_rows is not None and max_rows > 0:
@@ -404,11 +407,13 @@ def _read_csv_tsv_safe(
         headers = [str(c).strip() for c in raw.iloc[0].tolist()]
         data = raw.iloc[1:].reset_index(drop=True)
         data.columns = range(len(headers))
+        data_start_row_1based = st + 2
     else:
         header_df = raw.iloc[: header_rows + 1]
         headers = _flatten_headers(header_df)
         data = raw.iloc[header_rows + 1 :].reset_index(drop=True)
         data.columns = range(len(headers))
+        data_start_row_1based = st + (header_rows + 1) + 1
 
     headers = _simplify_flattened_headers(headers)
 
@@ -423,6 +428,8 @@ def _read_csv_tsv_safe(
             seen[h] = 0
             unique_headers.append(h)
     data.columns = unique_headers
+    data["__source_row__"] = [int(data_start_row_1based) + i for i in range(len(data))]
+    unique_headers = list(unique_headers) + ["__source_row__"]
     return data, unique_headers, header_rows + 1
 
 
@@ -462,6 +469,9 @@ def _read_docx_safe(path: str) -> Tuple[pd.DataFrame, List[str], int]:
             seen[h] = 0
             unique_headers.append(h)
     data.columns = unique_headers
+    # Word：第 1 行为表头，数据从第 2 行开始
+    data["__source_row__"] = [2 + i for i in range(len(data))]
+    unique_headers = list(unique_headers) + ["__source_row__"]
     return data, unique_headers, 1
 
 

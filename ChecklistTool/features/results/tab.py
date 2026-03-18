@@ -97,9 +97,8 @@ class TabResults(QWidget):
         layout.addLayout(h)
 
     def set_diff_result(self, diff_result):
-        """展示版本对比/交叉对比的 DiffResult，保证为「数据列 + __diff_type__ + __changed_fields__ + __changes_detail__」（图3样式）。"""
+        """展示 DiffResult。"""
         df = diff_result.to_dataframe()
-        # 强制列顺序：数据列在前 + 差异列；以 df 实际列为准，避免 diff_result.columns 不完整时只显示 3～4 列
         diff_col_names = ("__diff_type__", "__changed_fields__", "__changes_detail__")
         data_cols = [c for c in df.columns if c not in diff_col_names]
         diff_cols = [x for x in diff_col_names if x in df.columns]
@@ -118,6 +117,29 @@ class TabResults(QWidget):
                 f"未变 {getattr(diff_result, 'count_unchanged', 0)} | "
                 f"不匹配合计 {total}"
             )
+            try:
+                if "__diff_type__" in df.columns and "__source_row__" in df.columns:
+                    def _rows_of(t):
+                        sub = df[df["__diff_type__"] == t]
+                        rows = [int(x) for x in sub["__source_row__"].tolist() if str(x).strip() != ""]
+                        rows = sorted(set(rows))
+                        if len(rows) > 20:
+                            return ",".join(str(x) for x in rows[:20]) + f"...(共{len(rows)}行)"
+                        return ",".join(str(x) for x in rows)
+                    add_rows = _rows_of(DIFF_ADDED)
+                    del_rows = _rows_of(DIFF_DELETED)
+                    mod_rows = _rows_of(DIFF_MODIFIED)
+                    parts = []
+                    if add_rows:
+                        parts.append(f"新增行:{add_rows}")
+                    if del_rows:
+                        parts.append(f"删除行:{del_rows}")
+                    if mod_rows:
+                        parts.append(f"修改行:{mod_rows}")
+                    if parts:
+                        summary = summary + " | " + "；".join(parts)
+            except Exception:
+                pass
         self._summary_label.setText(summary)
         self._fill_table(df, max_display_rows=2500)
 
