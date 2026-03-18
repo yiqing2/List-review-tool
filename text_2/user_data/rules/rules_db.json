@@ -1,0 +1,102 @@
+{
+  "rules": [
+    {
+      "rule_id": "rule_1_2651911357392",
+      "name": "1",
+      "description": "",
+      "root": {
+        "field": "",
+        "operator": "eq",
+        "value": null,
+        "logic": "and",
+        "rule_name": "",
+        "children": [
+          {
+            "field": "ch3",
+            "operator": "eq",
+            "value": "1",
+            "logic": "and",
+            "rule_name": "",
+            "children": [
+              {
+                "field": "CH2",
+                "operator": "gt",
+                "value": "0",
+                "logic": "and",
+                "rule_name": "",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      "target_columns": [
+        "ch3"
+      ]
+    },
+    {
+      "rule_id": "rule_2_2651908224784",
+      "name": "2",
+      "description": "",
+      "root": {
+        "field": "",
+        "operator": "eq",
+        "value": null,
+        "logic": "and",
+        "rule_name": "",
+        "children": [
+          {
+            "field": "人数",
+            "operator": "gt",
+            "value": "8",
+            "logic": "and",
+            "rule_name": "",
+            "children": [
+              {
+                "field": "备注",
+                "operator": "empty",
+                "value": null,
+                "logic": "and",
+                "rule_name": "",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      "target_columns": []
+    },
+    {
+      "rule_id": "rule_3_2688055335248",
+      "name": "3",
+      "description": "",
+      "root": {
+        "field": "",
+        "operator": "eq",
+        "value": null,
+        "logic": "and",
+        "rule_name": "",
+        "children": [
+          {
+            "field": "CH1",
+            "operator": "eq",
+            "value": "A",
+            "logic": "and",
+            "rule_name": "",
+            "children": [
+              {
+                "field": "CH2",
+                "operator": "eq",
+                "value": "b",
+                "logic": "and",
+                "rule_name": "",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      "target_columns": []
+    }
+  ]
+}

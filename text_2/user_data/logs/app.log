@@ -1,0 +1,113 @@
+2026-03-16 09:59:19,032 [ERROR] 缺少 PyQt6，请安装: pip install PyQt6
+No module named 'PyQt6'
+2026-03-16 09:59:26,367 [ERROR] 缺少 PyQt6，请安装: pip install PyQt6
+No module named 'PyQt6'
+2026-03-16 10:00:19,697 [ERROR] 缺少 PyQt6，请安装: pip install PyQt6
+No module named 'PyQt6'
+2026-03-16 10:00:39,145 [ERROR] 缺少 PyQt6，请安装: pip install PyQt6
+No module named 'PyQt6'
+2026-03-16 10:01:21,810 [ERROR] 缺少 PyQt6，请安装: pip install PyQt6
+No module named 'PyQt6'
+2026-03-16 10:03:32,222 [ERROR] 启动失败: 'str' object is not callable
+Traceback (most recent call last):
+  File "D:\workspace\cursor\text_2\main.py", line 73, in main
+    from ui.main_window import MainWindow
+  File "D:\workspace\cursor\text_2\ui\__init__.py", line 2, in <module>
+    from .main_window import MainWindow
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 34, in <module>
+    from ui.tab_version_diff import TabVersionDiff
+  File "D:\workspace\cursor\text_2\ui\tab_version_diff.py", line 21, in <module>
+    from core.parsers import load_table_from_file, ParserError
+  File "D:\workspace\cursor\text_2\core\__init__.py", line 9, in <module>
+    from .rule_engine import RuleEngine, RuleNode
+  File "D:\workspace\cursor\text_2\core\rule_engine.py", line 28, in <module>
+    class RuleNode:
+  File "D:\workspace\cursor\text_2\core\rule_engine.py", line 42, in RuleNode
+    children: List["RuleNode"] = field(default_factory=list)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'str' object is not callable
+2026-03-16 10:03:32,225 [ERROR] 未捕获异常:
+Traceback (most recent call last):
+  File "D:\workspace\cursor\text_2\main.py", line 73, in main
+    from ui.main_window import MainWindow
+  File "D:\workspace\cursor\text_2\ui\__init__.py", line 2, in <module>
+    from .main_window import MainWindow
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 34, in <module>
+    from ui.tab_version_diff import TabVersionDiff
+  File "D:\workspace\cursor\text_2\ui\tab_version_diff.py", line 21, in <module>
+    from core.parsers import load_table_from_file, ParserError
+  File "D:\workspace\cursor\text_2\core\__init__.py", line 9, in <module>
+    from .rule_engine import RuleEngine, RuleNode
+  File "D:\workspace\cursor\text_2\core\rule_engine.py", line 28, in <module>
+    class RuleNode:
+  File "D:\workspace\cursor\text_2\core\rule_engine.py", line 42, in RuleNode
+    children: List["RuleNode"] = field(default_factory=list)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'str' object is not callable
+
+2026-03-17 09:35:49,002 [ERROR] 启动失败: type object 'QScrollArea' has no attribute 'ScrollBarPolicy'
+Traceback (most recent call last):
+  File "D:\workspace\cursor\text_2\main.py", line 74, in main
+    win = MainWindow()
+          ^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 55, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 73, in _setup_ui
+    tab_diff = TabVersionDiff()
+               ^^^^^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 90, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 95, in _setup_ui
+    scroll.setHorizontalScrollBarPolicy(QScrollArea.ScrollBarPolicy.ScrollBarAsNeeded)
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 'QScrollArea' has no attribute 'ScrollBarPolicy'
+2026-03-17 09:35:49,007 [ERROR] 未捕获异常:
+Traceback (most recent call last):
+  File "D:\workspace\cursor\text_2\main.py", line 74, in main
+    win = MainWindow()
+          ^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 55, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 73, in _setup_ui
+    tab_diff = TabVersionDiff()
+               ^^^^^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 90, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 95, in _setup_ui
+    scroll.setHorizontalScrollBarPolicy(QScrollArea.ScrollBarPolicy.ScrollBarAsNeeded)
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 'QScrollArea' has no attribute 'ScrollBarPolicy'
+
+2026-03-17 09:36:33,812 [ERROR] 启动失败: type object 'QScrollArea' has no attribute 'ScrollBarPolicy'
+Traceback (most recent call last):
+  File "D:\workspace\cursor\text_2\main.py", line 74, in main
+    win = MainWindow()
+          ^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 55, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 73, in _setup_ui
+    tab_diff = TabVersionDiff()
+               ^^^^^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 90, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 95, in _setup_ui
+    scroll.setHorizontalScrollBarPolicy(QScrollArea.ScrollBarPolicy.ScrollBarAsNeeded)
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 'QScrollArea' has no attribute 'ScrollBarPolicy'
+2026-03-17 09:36:33,815 [ERROR] 未捕获异常:
+Traceback (most recent call last):
+  File "D:\workspace\cursor\text_2\main.py", line 74, in main
+    win = MainWindow()
+          ^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 55, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\ui\main_window.py", line 73, in _setup_ui
+    tab_diff = TabVersionDiff()
+               ^^^^^^^^^^^^^^^^
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 90, in __init__
+    self._setup_ui()
+  File "D:\workspace\cursor\text_2\features\version_diff\tab.py", line 95, in _setup_ui
+    scroll.setHorizontalScrollBarPolicy(QScrollArea.ScrollBarPolicy.ScrollBarAsNeeded)
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 'QScrollArea' has no attribute 'ScrollBarPolicy'
+
