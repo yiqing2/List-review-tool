@@ -34,7 +34,6 @@ ChecklistTool/
 │   └── export_engine.py # 导出 PDF/Excel/CSV
 ├── ui/                  # 界面
 │   ├── main_window.py   # 主窗口与选项卡
-│   ├── login_dialog.py  # 兼容旧版（已不再使用角色）
 │   ├── widgets.py       # 通用控件
 │   ├── rule_tree_editor.py  # 规则条件树编辑
 │   ├── tab_version_diff.py

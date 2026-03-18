@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QTextEdit,
     QSplitter,
+    QSpinBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -85,6 +86,29 @@ class TabRulesLib(QWidget):
         self.sample_file = FilePathRow("文件：")
         self.sample_file.path_changed.connect(self._on_sample_file_selected)
         right_layout.addWidget(self.sample_file)
+        sample_opts = QHBoxLayout()
+        sample_opts.addWidget(QLabel("表头占用行数："))
+        self.sample_header_rows_spin = QSpinBox()
+        self.sample_header_rows_spin.setRange(0, 10)
+        self.sample_header_rows_spin.setValue(0)
+        self.sample_header_rows_spin.setToolTip(
+            "0=Excel 自动检测表头行数。\n"
+            "1=仅第1行为表头；2=第1～2行合并为表头。"
+        )
+        sample_opts.addWidget(self.sample_header_rows_spin)
+        sample_opts.addWidget(QLabel("跳过顶部行数："))
+        self.sample_skip_top_rows_spin = QSpinBox()
+        self.sample_skip_top_rows_spin.setRange(0, 50)
+        self.sample_skip_top_rows_spin.setValue(0)
+        self.sample_skip_top_rows_spin.setToolTip("例如第1行为大标题、第2行才是列名：跳过=1，表头=1")
+        sample_opts.addWidget(self.sample_skip_top_rows_spin)
+        self.btn_reload_sample_cols = QPushButton("按设置重读表头")
+        self.btn_reload_sample_cols.clicked.connect(self._reload_sample_columns)
+        sample_opts.addWidget(self.btn_reload_sample_cols)
+        sample_opts.addStretch()
+        right_layout.addLayout(sample_opts)
+        self.sample_header_rows_spin.valueChanged.connect(lambda _=None: self._reload_sample_columns())
+        self.sample_skip_top_rows_spin.valueChanged.connect(lambda _=None: self._reload_sample_columns())
         self.desc_edit = QTextEdit()
         self.desc_edit.setPlaceholderText("规则说明（解锁编辑后可修改）")
         self.desc_edit.setMaximumHeight(80)
@@ -130,11 +154,10 @@ class TabRulesLib(QWidget):
             self._edit_unlocked = False
             self._apply_edit_lock()
             return
-        key, ok = QInputDialog.getText(
-            self,
-            "解锁规则库编辑",
-            "请输入秘钥：",
-            QLineEdit.EchoMode.Password,
+        key, ok = self._ask_text(
+            title="解锁规则库编辑",
+            label="请输入秘钥：",
+            echo_mode=QLineEdit.EchoMode.Password,
         )
         if not ok:
             return
@@ -185,7 +208,7 @@ class TabRulesLib(QWidget):
         if not self._edit_unlocked:
             QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
             return
-        name, ok = QInputDialog.getText(self, "新增规则", "规则名称：")
+        name, ok = self._ask_text(title="新增规则", label="规则名称：")
         if not ok or not name.strip():
             return
         rule = ValidationRule(rule_id="", name=name.strip(), description="", root=RuleNode())
@@ -252,10 +275,35 @@ class TabRulesLib(QWidget):
     def _on_sample_file_selected(self, path: str):
         if not path or not load_table_from_file:
             return
+        self._reload_sample_columns()
+
+    def _reload_sample_columns(self):
+        path = self.sample_file.path()
+        if not path or not load_table_from_file:
+            return
         try:
-            _, cols, _ = load_table_from_file(path)
+            kwargs = {}
+            hr = self.sample_header_rows_spin.value()
+            st = self.sample_skip_top_rows_spin.value()
+            if hr > 0:
+                kwargs["header_rows"] = hr
+            if st > 0:
+                kwargs["skip_top_rows"] = st
+            _, cols, _ = load_table_from_file(path, **kwargs)
             self.set_columns_for_editor(cols or [])
         except Exception as e:
             QMessageBox.warning(self, "提示", f"无法读取表头：{e}")
+
+    def _ask_text(self, title: str, label: str, echo_mode=QLineEdit.EchoMode.Normal):
+        """统一文本输入弹窗：限制宽度，避免被长文本撑开。"""
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setLabelText(label)
+        dlg.setTextEchoMode(echo_mode)
+        dlg.setMinimumWidth(360)
+        dlg.setMaximumWidth(560)
+        dlg.resize(420, 120)
+        ok = dlg.exec() == QInputDialog.DialogCode.Accepted
+        return dlg.textValue(), ok
 
 

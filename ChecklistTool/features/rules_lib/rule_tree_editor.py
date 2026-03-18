@@ -23,6 +23,9 @@ from PyQt6.QtCore import Qt
 from core.rules import RuleNode, RuleEngine
 
 
+MAX_NODE_LABEL_CHARS = 120
+
+
 def _op_label(op: str) -> str:
     m = {
         "eq": "等于 (=)",
@@ -52,6 +55,14 @@ def _format_value(value) -> str:
         # 列表值（如 in/not_in）更易读的展示
         return "[" + ", ".join(str(x) for x in value) + "]"
     return str(value)
+
+
+def _elide_text(text: str, max_chars: int = MAX_NODE_LABEL_CHARS) -> str:
+    """超长文本截断，避免树节点内容把界面撑宽。"""
+    s = str(text or "")
+    if max_chars <= 0 or len(s) <= max_chars:
+        return s
+    return s[: max_chars - 1] + "..."
 
 
 def _format_leaf_brief(node: RuleNode) -> str:
@@ -96,6 +107,10 @@ class RuleNodeEditDialog(QDialog):
     def __init__(self, node: RuleNode, columns: list, parent=None):
         super().__init__(parent)
         self.setWindowTitle("编辑条件节点")
+        # 限制弹窗宽度，防止超长字段名/值把窗口撑满屏。
+        self.setMinimumWidth(520)
+        self.setMaximumWidth(900)
+        self.resize(680, 280)
         self.node = node
         self.columns = columns or []
         self._setup_ui()
@@ -104,9 +119,15 @@ class RuleNodeEditDialog(QDialog):
         layout = QFormLayout(self)
         self.field_combo = QComboBox()
         self.field_combo.setEditable(True)  # 可手动输入列名（如 系统|专业），无需先加载文件
+        self.field_combo.setMinimumContentsLength(24)
+        self.field_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.field_combo.addItem("（无/根节点）", "")
         for c in self.columns:
             self.field_combo.addItem(c, c)
+        try:
+            self.field_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
+        except Exception:
+            pass
         layout.addRow("字段（可下拉选择或直接输入列名）:", self.field_combo)
         self.op_combo = QComboBox()
         for op in RuleEngine.OPERATORS:
@@ -173,10 +194,11 @@ def _node_to_item(node: RuleNode) -> QTreeWidgetItem:
         briefs = _collect_leaf_briefs(node, limit=3)
         briefs_part = (" | 示例: " + "；".join(briefs) + (" …" if count > len(briefs) else "")) if briefs else ""
         rn_part = f" | 规则名:{rn}" if rn else ""
-        label = f"条件组({_logic_label(node.logic)}) | 条件数:{count}{rn_part}{briefs_part}"
+        full_label = f"条件组({_logic_label(node.logic)}) | 条件数:{count}{rn_part}{briefs_part}"
     else:
-        label = _format_leaf_brief(node)
-    item = QTreeWidgetItem([label])
+        full_label = _format_leaf_brief(node)
+    item = QTreeWidgetItem([_elide_text(full_label)])
+    item.setToolTip(0, full_label)
     item.setData(0, Qt.ItemDataRole.UserRole, node)
     return item
 
@@ -212,6 +234,7 @@ class RuleTreeEditor(QWidget):
         layout = QVBoxLayout(self)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["条件"])
+        self.tree.setTextElideMode(Qt.TextElideMode.ElideRight)
         layout.addWidget(self.tree)
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("添加根/子条件")
@@ -288,8 +311,9 @@ class RuleTreeEditor(QWidget):
         dlg = RuleNodeEditDialog(node, self.columns, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             dlg.get_node()
-            label = _node_to_item(node).text(0)
-            item.setText(0, label)
+            display_item = _node_to_item(node)
+            item.setText(0, display_item.text(0))
+            item.setToolTip(0, display_item.toolTip(0))
             item.setData(0, Qt.ItemDataRole.UserRole, node)
 
     def _del_node(self):

@@ -73,8 +73,6 @@ RULES_DB_FILE = os.path.join(RULES_DIR, "rules_db.json")
 def get_rules_fallback_path() -> str:
     """规则库在项目目录不可写时使用的用户目录路径（便于长期保存）。"""
     return os.path.join(os.path.expanduser("~"), "清单对比校审工具", "rules", "rules_db.json")
-# 兼容旧版本：曾使用 current_user.json 记录角色；现在不再使用角色控制权限
-CURRENT_USER_FILE = os.path.join(USER_DATA_DIR, "current_user.json")
 
 # -----------------------------------------------------------------------------
 # 默认导出与界面
