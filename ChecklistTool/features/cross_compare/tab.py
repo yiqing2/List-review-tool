@@ -6,6 +6,7 @@
 import traceback
 import os
 from typing import Optional
+import re
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -56,6 +57,7 @@ class CrossCompareWorker(QThread):
         skip_top_rows_base: int = 0,
         header_rows_other: Optional[int] = None,
         skip_top_rows_other: int = 0,
+        strip_unit_prefix_in_keys: bool = False,
     ):
         super().__init__()
         self.base_path = base_path
@@ -70,6 +72,7 @@ class CrossCompareWorker(QThread):
         self.skip_top_rows_base = skip_top_rows_base
         self.header_rows_other = header_rows_other
         self.skip_top_rows_other = skip_top_rows_other
+        self.strip_unit_prefix_in_keys = strip_unit_prefix_in_keys
 
     def run(self):
         try:
@@ -95,6 +98,29 @@ class CrossCompareWorker(QThread):
                 df, _, _ = load_table_from_file(p, **kw_other)
                 other_dfs.append(df)
             self.progress.emit(80, "执行交叉对比...")
+            # 可选：键列去除机组号前缀（通常为 1~2 位数字，可能带 #/号/机组/分隔符）
+            if self.strip_unit_prefix_in_keys and self.key_cols:
+                pat = re.compile(r"^\s*(\d{1,2})(?:\s*(?:#|＃|号|机组))?\s*[-_./\s]*")
+
+                def _strip(v):
+                    if v is None:
+                        return v
+                    s = str(v).strip()
+                    if not s:
+                        return s
+                    return pat.sub("", s, count=1).strip()
+
+                def _apply(df):
+                    if df is None or df.empty:
+                        return df
+                    out = df.copy()
+                    for c in self.key_cols:
+                        if c in out.columns:
+                            out[c] = out[c].map(_strip)
+                    return out
+
+                base_df = _apply(base_df)
+                other_dfs = [_apply(df) for df in other_dfs]
             # 默认参与对比的列：两表共有且排除内部列，避免只比行号导致“全未变”
             def _data_columns(base, other):
                 return [c for c in base.columns if c in other.columns and c not in ("__row_index__", "__diff_type__", "__changed_fields__")]
@@ -295,6 +321,12 @@ class TabCrossCompare(QWidget):
 
         g_cols = QGroupBox("键列与对比列")
         fl2 = QVBoxLayout(g_cols)
+        self.strip_unit_prefix_cb = QCheckBox("键列去除机组号前缀（1~2 位数字）后再匹配对比")
+        self.strip_unit_prefix_cb.setToolTip(
+            "用于两张表键列仅机组号不同的场景。\n"
+            "示例：01-ABC123 与 02-ABC123，会先去掉 01/02 再按 ABC123 匹配。"
+        )
+        fl2.addWidget(self.strip_unit_prefix_cb)
         self.missing_items_only_cb = QCheckBox("缺项检测（以行数更多的文件为基准，找出另一份缺少的项并标注基准行号）")
         self.missing_items_only_cb.setToolTip("勾选后将只输出“少了哪一项”，不做逐列差异对比；需要先选择键列。")
         fl2.addWidget(self.missing_items_only_cb)
@@ -429,6 +461,7 @@ class TabCrossCompare(QWidget):
         skip_top_rows_base = int(self.skip_top_base_spin.value())
         header_rows_other = self.header_rows_other_spin.value() if self.header_rows_other_spin.value() > 0 else None
         skip_top_rows_other = int(self.skip_top_other_spin.value())
+        strip_unit = bool(self.strip_unit_prefix_cb.isChecked()) if hasattr(self, "strip_unit_prefix_cb") else False
         max_rows = 0
         try:
             t = self.max_rows_edit.text().strip()
@@ -450,6 +483,7 @@ class TabCrossCompare(QWidget):
             skip_top_rows_base=skip_top_rows_base,
             header_rows_other=header_rows_other,
             skip_top_rows_other=skip_top_rows_other,
+            strip_unit_prefix_in_keys=strip_unit,
         )
         self._worker.progress.connect(self.progress.set_progress)
         self._worker.finished.connect(self._on_finished)
