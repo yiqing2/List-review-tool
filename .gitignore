@@ -209,3 +209,5 @@ __marimo__/
 # Project local data
 .venv/
 user_data/
+.vs/
+ChecklistTool/.vs/
