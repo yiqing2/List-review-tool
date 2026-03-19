@@ -34,7 +34,9 @@ class RuleNode:
     - field: 字段名（对应表头，支持复杂表头如 "系统|专业"）
     - operator: 运算符，如 "eq"(等于)、"in"(在列表中)、"not_empty"、"regex" 等
     - value: 与 operator 配合，如 "in" 时为列表，"regex" 时为正则字符串
-    - logic: 与子节点组合方式，"and" 表示全部满足，"or" 表示满足其一
+        - logic: 子节点组合方式，"and" 表示全部满足，"or" 表示满足其一
+            * 当节点本身也配置了 field 且存在 children 时，语义为“父条件命中后，子条件必须满足”
+                即： (not 父条件) or 子条件组
     - children: 子节点列表；无子节点时本节点为叶子条件
     - rule_name: 规则名称，在校验结果中显示“违反的规则名称”
     """
@@ -125,7 +127,7 @@ class RuleViolation:
 class RuleEngine:
     """执行规则匹配，返回违反规则的行及出错字段、规则名称。"""
 
-    OPERATORS = ("eq", "ne", "gt", "ge", "lt", "le", "in", "not_in", "not_empty", "empty", "regex", "contains")
+    OPERATORS = ("eq", "in")
 
     def __init__(self, rules_file: Optional[str] = None):
         self.rules_file = rules_file or RULES_DB_FILE
@@ -189,15 +191,26 @@ class RuleEngine:
 
     def _eval_node(self, node: RuleNode, row: pd.Series) -> bool:
         """递归求值条件树。"""
+        has_self_cond = bool(node.field)
+        self_ok = True
+        if has_self_cond:
+            cell = row.get(node.field, None)
+            self_ok = self._eval_cell(cell, node.operator, node.value)
+
         if node.children:
             results = [self._eval_node(c, row) for c in node.children]
             if node.logic == "and":
-                return all(results)
-            return any(results)
-        if not node.field:
-            return True
-        cell = row.get(node.field, None)
-        return self._eval_cell(cell, node.operator, node.value)
+                children_ok = all(results)
+            else:
+                children_ok = any(results)
+
+            # 父节点同时有“自身条件 + 子节点”时，采用蕴含语义：
+            # 父条件不命中 -> 该分支直接通过；父条件命中 -> 子条件组必须通过。
+            if has_self_cond:
+                return (not self_ok) or children_ok
+            return children_ok
+
+        return self_ok
 
     def validate_row(self, row: pd.Series, rule: ValidationRule) -> Optional[RuleViolation]:
         """判断一行是否违反该规则；违反则返回 RuleViolation。"""
@@ -237,6 +250,66 @@ class RuleEngine:
                     v.row_index = int(idx)
                     violations.append(v)
         return violations
+
+    def _rule_row_activated(self, rule: ValidationRule, row: pd.Series) -> bool:
+        """
+        判断一行是否“进入该规则的验证范围”。
+        规则：若存在任一叶子条件，其祖先链（不含叶子自身）上的字段条件全部命中，则视为已进入。
+        """
+        root = rule.root
+        if root is None:
+            return False
+
+        def _is_true(node: RuleNode) -> bool:
+            if not getattr(node, "field", ""):
+                return True
+            cell = row.get(node.field, None)
+            return self._eval_cell(cell, node.operator, node.value)
+
+        def _walk(node: RuleNode, ancestors: List[RuleNode]) -> bool:
+            current_ancestors = list(ancestors)
+            if getattr(node, "field", ""):
+                current_ancestors.append(node)
+
+            children = list(getattr(node, "children", []) or [])
+            if not children:
+                # 叶子本身是“要校验的约束”，进入范围仅看其祖先链命中情况。
+                if not getattr(node, "field", ""):
+                    return False
+                trigger_anc = current_ancestors[:-1]
+                return all(_is_true(a) for a in trigger_anc)
+
+            for c in children:
+                if _walk(c, current_ancestors):
+                    return True
+            return False
+
+        return _walk(root, [])
+
+    def validate_dataframe_with_coverage(
+        self,
+        df: pd.DataFrame,
+        rule_ids: Optional[List[str]] = None,
+    ) -> tuple[List[RuleViolation], List[int]]:
+        """
+        返回 (违规列表, 未进入验证范围的行索引列表)。
+        未进入验证范围：对所选规则集合，均未命中任何规则前置条件。
+        """
+        violations = self.validate_dataframe(df, rule_ids=rule_ids)
+        rules = [r for r in self._rules if not rule_ids or r.rule_id in rule_ids]
+        if not rules:
+            return violations, []
+
+        unvalidated_rows: List[int] = []
+        for idx, row in df.iterrows():
+            activated = False
+            for rule in rules:
+                if self._rule_row_activated(rule, row):
+                    activated = True
+                    break
+            if not activated:
+                unvalidated_rows.append(int(idx))
+        return violations, unvalidated_rows
 
     def load_rules(self) -> bool:
         """从规则库文件加载；若默认路径无文件则尝试用户目录（与长期保存一致）。"""
