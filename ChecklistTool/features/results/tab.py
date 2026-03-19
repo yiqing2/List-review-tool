@@ -36,12 +36,13 @@ class ExportWorker(QThread):
     finished_err = pyqtSignal(str)
     progress = pyqtSignal(int, str)  # 进度 0-100，提示文字
 
-    def __init__(self, df, path: str, fmt: str, violations_by_row=None):
+    def __init__(self, df, path: str, fmt: str, violations_by_row=None, unvalidated_rows=None):
         super().__init__()
         self.df = df
         self.path = path
         self.fmt = fmt
         self.violations_by_row = violations_by_row
+        self.unvalidated_rows = set(unvalidated_rows or [])
 
     def run(self):
         try:
@@ -50,11 +51,17 @@ class ExportWorker(QThread):
             if self.fmt == "csv":
                 export_to_csv(self.df, self.path)
             elif self.fmt == "pdf":
-                export_to_pdf(self.df, self.path, violations_by_row=self.violations_by_row)
+                export_to_pdf(
+                    self.df,
+                    self.path,
+                    violations_by_row=self.violations_by_row,
+                    unvalidated_rows=self.unvalidated_rows,
+                )
             else:
                 export_to_excel(
                     self.df, self.path,
                     violations_by_row=self.violations_by_row,
+                    unvalidated_rows=self.unvalidated_rows,
                     progress_callback=on_progress,
                 )
             self.finished_ok.emit(self.path)
@@ -69,6 +76,7 @@ class TabResults(QWidget):
         super().__init__(parent)
         self._df = None
         self._violations_by_row = None  # {row_index: [RuleViolation, ...]}
+        self._unvalidated_rows = set()  # {row_index, ...}
         self._export_worker = None
         self._export_btn = None
         self._setup_ui()
@@ -106,6 +114,7 @@ class TabResults(QWidget):
         df = df[[c for c in want if c in df.columns]]
         self._df = df
         self._violations_by_row = None
+        self._unvalidated_rows = set()
         self._last_diff_result = diff_result
         summary = ""
         if hasattr(diff_result, "total_mismatched"):
@@ -143,11 +152,14 @@ class TabResults(QWidget):
         self._summary_label.setText(summary)
         self._fill_table(df, max_display_rows=2500)
 
-    def set_validation_result(self, df, violations):
+    def set_validation_result(self, df, violations, unvalidated_rows=None):
         """展示规则校验结果：df 为原表，violations 为违规列表。"""
         self._last_diff_result = None
+        self._unvalidated_rows = set(unvalidated_rows or [])
         if hasattr(self, "_summary_label"):
-            self._summary_label.setText(f"校验违规：{len(violations)} 条")
+            self._summary_label.setText(
+                f"校验违规：{len(violations)} 条 | 未进入验证：{len(self._unvalidated_rows)} 行"
+            )
         self._df = df
         by_row = {}
         for v in violations:
@@ -160,9 +172,16 @@ class TabResults(QWidget):
         import pandas as pd
         display = df.copy()
         display["__违规规则__"] = ""
+        display["__验证状态__"] = "已验证"
         for idx, viols in by_row.items():
             if idx in display.index:
                 display.loc[idx, "__违规规则__"] = "; ".join(v.rule_name for v in viols)
+                display.loc[idx, "__验证状态__"] = "违规"
+        for idx in self._unvalidated_rows:
+            if idx in display.index:
+                display.loc[idx, "__验证状态__"] = "未进入验证"
+                if not str(display.loc[idx, "__违规规则__"] or "").strip():
+                    display.loc[idx, "__违规规则__"] = "未进入验证（未命中规则前置条件）"
         self._df = display
         self._fill_table(display, max_display_rows=2500)
 
@@ -202,6 +221,9 @@ class TabResults(QWidget):
                         if hasattr(v, "error_fields") and col_name in getattr(v, "error_fields", []):
                             item.setBackground(QColor("#FF9999"))
                             break
+                # 未进入验证行高亮（整行浅橙）
+                if row_key in self._unvalidated_rows:
+                    item.setBackground(QColor("#FFD8A8"))
                 self.table.setItem(r, c, item)
                 if (c * display_rows + r + 1) % batch == 0:
                     QApplication.processEvents()
@@ -230,6 +252,7 @@ class TabResults(QWidget):
             path,
             fmt,
             self._violations_by_row,
+            self._unvalidated_rows,
         )
         self._export_worker.finished_ok.connect(self._on_export_done)
         self._export_worker.finished_err.connect(self._on_export_error)

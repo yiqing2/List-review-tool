@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
     QDialogButtonBox,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt
 
@@ -164,9 +165,34 @@ class RuleNodeEditDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+
+    def _resolve_field_value(self) -> str:
+        """解析字段值：优先使用下拉项 data；仅在手动输入自定义列名时回退文本。"""
+        idx = self.field_combo.currentIndex()
+        if idx >= 0:
+            data = self.field_combo.itemData(idx)
+            if data is not None:
+                # 包含 ""（无/根节点）在内，均按 data 作为真实值
+                return str(data)
+        # 未命中下拉项（手动输入）时，使用文本
+        return self.field_combo.currentText().strip()
+
+    @staticmethod
+    def _operator_requires_value(op: str) -> bool:
+        return op in {"eq", "in"}
+
+    def _on_accept(self):
+        # 仅当该节点配置了字段条件时，才校验“值是否必填”。
+        field_val = self._resolve_field_value()
+        op = self.op_combo.currentData() or "eq"
+        raw_val = self.value_edit.text().strip()
+        if (field_val or "").strip() and self._operator_requires_value(op) and raw_val == "":
+            QMessageBox.warning(self, "提示", "当前运算符需要填写“值”，否则条件无效。")
+            return
+        self.accept()
 
     def get_node(self) -> RuleNode:
         val = self.value_edit.text().strip()
@@ -174,10 +200,8 @@ class RuleNodeEditDialog(QDialog):
             value = [x.strip() for x in val.split(",")]
         else:
             value = val if val else None
-        # 优先用下拉选中项，否则用手动输入的文本（支持未在列表中的列名）
-        field_val = self.field_combo.currentData()
-        if field_val is None or (isinstance(field_val, str) and not field_val.strip()):
-            field_val = self.field_combo.currentText().strip()
+        # 优先用下拉选中项 data；手动输入时回退文本
+        field_val = self._resolve_field_value()
         self.node.field = field_val or ""
         self.node.operator = self.op_combo.currentData() or "eq"
         self.node.value = value

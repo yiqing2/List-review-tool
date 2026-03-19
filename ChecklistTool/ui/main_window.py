@@ -70,9 +70,17 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("就绪")
 
-    def _on_validate_result(self, df, violations):
-        self._tab_results.set_validation_result(df, violations)
-        self.statusBar().showMessage(f"校验完成，共 {len(violations)} 条违规")
+    def _on_validate_result(self, df, payload):
+        if isinstance(payload, dict):
+            violations = payload.get("violations", []) or []
+            unvalidated_rows = payload.get("unvalidated_rows", []) or []
+        else:
+            violations = payload or []
+            unvalidated_rows = []
+        self._tab_results.set_validation_result(df, violations, unvalidated_rows=unvalidated_rows)
+        self.statusBar().showMessage(
+            f"校验完成，违规 {len(violations)} 条，未进入验证 {len(unvalidated_rows)} 行"
+        )
 
     def _on_cross_result(self, results):
         if not results:
