@@ -213,3 +213,5 @@ user_data/
 # ChecklistTool local runtime data (keep local, do not commit)
 ChecklistTool/user_data/logs/app.log
 ChecklistTool/user_data/rules/rules_db.json
+.vs/
+ChecklistTool/.vs/
