@@ -16,6 +16,9 @@ python-docx>=0.8.11
 # PDF 导出（带格式）
 reportlab>=4.0.0
 
+# 打包为 Windows 可执行文件
+pyinstaller>=6.0.0
+
 # 可选：.et 格式（金山 WPS）需额外调研，此处预留
 # pyet 或 转换器
 
