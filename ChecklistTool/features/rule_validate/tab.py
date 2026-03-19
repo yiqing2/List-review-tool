@@ -31,7 +31,7 @@ except ImportError:
 
 class ValidateWorker(QThread):
     progress = pyqtSignal(int, str)
-    finished = pyqtSignal(object, object)  # df, violations
+    finished = pyqtSignal(object, object)  # df, payload
     error = pyqtSignal(str)
 
     def __init__(
@@ -63,15 +63,28 @@ class ValidateWorker(QThread):
             self.progress.emit(50, "加载规则并校验...")
             engine = RuleEngine()
             engine.load_rules()
-            violations = engine.validate_dataframe(df, rule_ids=self.rule_ids or None)
+            if hasattr(engine, "validate_dataframe_with_coverage"):
+                violations, unvalidated_rows = engine.validate_dataframe_with_coverage(
+                    df,
+                    rule_ids=self.rule_ids or None,
+                )
+            else:
+                violations = engine.validate_dataframe(df, rule_ids=self.rule_ids or None)
+                unvalidated_rows = []
             self.progress.emit(100, "校验完成")
-            self.finished.emit(df, violations)
+            self.finished.emit(
+                df,
+                {
+                    "violations": violations,
+                    "unvalidated_rows": unvalidated_rows,
+                },
+            )
         except Exception as e:
             self.error.emit(str(e) + "\n" + traceback.format_exc())
 
 
 class TabRuleValidate(QWidget):
-    result_ready = pyqtSignal(object, object)  # df, violations
+    result_ready = pyqtSignal(object, object)  # df, payload
 
     def __init__(self, parent=None):
         super().__init__(parent)

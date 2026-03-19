@@ -24,6 +24,7 @@ COLOR_ADDED = "FF00FF00"   # 浅绿
 COLOR_DELETED = "FFFF0000" # 浅红
 COLOR_MODIFIED = "FFFFFF00" # 浅黄
 COLOR_ERROR_FIELD = "FFFF9999"  # 出错字段高亮
+COLOR_UNVALIDATED = "FFFFD8A8"  # 未进入验证（浅橙）
 
 
 class ExportError(Exception):
@@ -47,6 +48,7 @@ def _export_excel_xlsxwriter(
     diff_type_column: str,
     changed_fields_column: str,
     violations_by_row: Optional[Dict[int, List[Any]]],
+    unvalidated_rows: Optional[set],
     progress_callback: Optional[Callable[[int, str], None]],
 ) -> None:
     """使用 xlsxwriter 批量写入，按行设置格式，显著加快大表导出。"""
@@ -57,6 +59,7 @@ def _export_excel_xlsxwriter(
     fmt_deleted = wb.add_format({"bg_color": "#FFB6C1"})
     fmt_modified = wb.add_format({"bg_color": "#FFFFE0"})
     fmt_error = wb.add_format({"bg_color": "#FF9999"})
+    fmt_unvalidated = wb.add_format({"bg_color": "#FFD8A8"})
 
     for col, h in enumerate(header):
         ws.write_string(0, col, str(h))
@@ -82,6 +85,8 @@ def _export_excel_xlsxwriter(
             ws.set_row(row_num, None, fmt_modified)
         elif violations_by_row and int(df.index[idx]) in violations_by_row:
             ws.set_row(row_num, None, fmt_error)
+        elif unvalidated_rows and int(df.index[idx]) in unvalidated_rows:
+            ws.set_row(row_num, None, fmt_unvalidated)
     if progress_callback:
         progress_callback(95, "保存文件…")
     wb.close()
@@ -93,6 +98,7 @@ def export_to_excel(
     diff_type_column: str = "__diff_type__",
     changed_fields_column: str = "__changed_fields__",
     violations_by_row: Optional[Dict[int, List[Any]]] = None,
+    unvalidated_rows: Optional[set] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> str:
     """
@@ -111,7 +117,7 @@ def export_to_excel(
         import xlsxwriter
         _export_excel_xlsxwriter(
             df, path, cols, header, diff_type_column, changed_fields_column,
-            violations_by_row, progress_callback,
+            violations_by_row, unvalidated_rows, progress_callback,
         )
         return path
     except ImportError:
@@ -130,6 +136,7 @@ def export_to_excel(
     fill_deleted = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
     fill_modified = PatternFill(start_color="FFFFE0", end_color="FFFFE0", fill_type="solid")
     fill_error = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
+    fill_unvalidated = PatternFill(start_color="FFD8A8", end_color="FFD8A8", fill_type="solid")
 
     ws.append(header)
     n = len(df)
@@ -169,6 +176,8 @@ def export_to_excel(
                         if hasattr(v, "error_fields") and c in getattr(v, "error_fields", []):
                             cell.fill = fill_error
                             break
+                if unvalidated_rows and int(df.index[idx]) in unvalidated_rows:
+                    cell.fill = fill_unvalidated
     if progress_callback:
         progress_callback(95, "保存文件…")
     try:
@@ -202,6 +211,7 @@ def export_to_pdf(
     diff_type_column: str = "__diff_type__",
     changed_fields_column: str = "__changed_fields__",
     violations_by_row: Optional[Dict[int, List[Any]]] = None,
+    unvalidated_rows: Optional[set] = None,
 ) -> str:
     """
     导出为 PDF，带简单表格格式与差异说明（颜色用文字标注：新增/删除/修改）。
@@ -228,6 +238,10 @@ def export_to_pdf(
     data = [header]
     for i, row in df.iterrows():
         diff_type = row.get(diff_type_column, "")
+        if unvalidated_rows and int(i) in unvalidated_rows:
+            diff_label = "未进入验证"
+            data.append([str(row.get(c, ""))[:20] for c in cols] + [diff_label])
+            continue
         diff_label = {"added": "新增", "deleted": "删除", "modified": "修改", "unchanged": "未变"}.get(diff_type, diff_type)
         data.append([str(row.get(c, ""))[:20] for c in cols] + [diff_label])
 
@@ -245,6 +259,8 @@ def export_to_pdf(
             style_list.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFB6C1")))
         elif diff_val == "修改":
             style_list.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFFFE0")))
+        elif diff_val == "未进入验证":
+            style_list.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFD8A8")))
         else:
             style_list.append(("ROWBACKGROUNDS", (0, r), (-1, r), [colors.white]))
     t = Table(data, repeatRows=1)
