@@ -32,6 +32,12 @@ MANIFEST
 *.manifest
 *.spec
 
+# Packaged app outputs (keep local)
+ChecklistTool/dist/
+ChecklistTool/build/
+ChecklistTool/*.spec
+ChecklistTool/*.exe
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
