@@ -15,8 +15,9 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QSpinBox,
     QLineEdit,
+    QListWidgetItem,
 )
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 from ui.widgets import FilePathRow, ProgressWidget
 
@@ -89,6 +90,8 @@ class TabRuleValidate(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._worker = None
+        self._collapsed_set_ids = set()
+        self._known_set_ids = set()
         self._setup_ui()
         self._refresh_rules()
 
@@ -135,6 +138,7 @@ class TabRuleValidate(QWidget):
         fl2 = QVBoxLayout(g2)
         self.rule_list = QListWidget()
         self.rule_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.rule_list.itemDoubleClicked.connect(self._on_rule_item_double_clicked)
         fl2.addWidget(self.rule_list)
         layout.addWidget(g2)
 
@@ -146,13 +150,106 @@ class TabRuleValidate(QWidget):
         layout.addStretch()
 
     def _refresh_rules(self):
+        selected_ids = set(self._collect_selected_rule_ids())
         self.rule_list.clear()
         if not RuleEngine:
             return
         engine = RuleEngine()
         engine.load_rules()
-        for r in engine.get_rules():
-            self.rule_list.addItem(f"{r.name} ({r.rule_id})")
+        sets = engine.get_rule_sets() if hasattr(engine, "get_rule_sets") else []
+        rules = engine.get_rules()
+        rule_map = {r.rule_id: r for r in rules}
+        grouped_ids = set()
+
+        existing_set_ids = {s.set_id for s in sets}
+        new_set_ids = existing_set_ids - self._known_set_ids
+        self._known_set_ids = set(existing_set_ids)
+        self._collapsed_set_ids = {sid for sid in self._collapsed_set_ids if sid in existing_set_ids}
+        self._collapsed_set_ids.update(new_set_ids)
+
+        for rs in sets:
+            item_rule_ids = [rid for rid in rs.rule_ids if rid in rule_map]
+            if not item_rule_ids:
+                continue
+            grouped_ids.update(item_rule_ids)
+
+            group_item = QListWidgetItem(f"[规则集] {rs.name} ({len(item_rule_ids)} 条)")
+            group_item.setData(
+                Qt.ItemDataRole.UserRole,
+                {
+                    "item_type": "set",
+                    "set_id": rs.set_id,
+                    "rule_ids": item_rule_ids,
+                },
+            )
+            self.rule_list.addItem(group_item)
+            if selected_ids.intersection(item_rule_ids):
+                group_item.setSelected(True)
+
+            if rs.set_id in self._collapsed_set_ids:
+                continue
+
+            for rid in item_rule_ids:
+                r = rule_map[rid]
+                item = QListWidgetItem(f"   └ {r.name} ({r.rule_id})")
+                item.setData(
+                    Qt.ItemDataRole.UserRole,
+                    {
+                        "item_type": "rule",
+                        "rule_id": r.rule_id,
+                    },
+                )
+                self.rule_list.addItem(item)
+                if r.rule_id in selected_ids:
+                    item.setSelected(True)
+
+        for r in rules:
+            if r.rule_id in grouped_ids:
+                continue
+            item = QListWidgetItem(f"{r.name} ({r.rule_id})")
+            item.setData(
+                Qt.ItemDataRole.UserRole,
+                {
+                    "item_type": "rule",
+                    "rule_id": r.rule_id,
+                },
+            )
+            self.rule_list.addItem(item)
+            if r.rule_id in selected_ids:
+                item.setSelected(True)
+
+    def _on_rule_item_double_clicked(self, item: QListWidgetItem):
+        item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+        if item_data.get("item_type") != "set":
+            return
+        set_id = item_data.get("set_id")
+        if not set_id:
+            return
+        if set_id in self._collapsed_set_ids:
+            self._collapsed_set_ids.remove(set_id)
+        else:
+            self._collapsed_set_ids.add(set_id)
+        self._refresh_rules()
+
+    def _collect_selected_rule_ids(self) -> list:
+        ids = []
+        for item in self.rule_list.selectedItems():
+            item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+            if item_data.get("item_type") == "rule":
+                rid = item_data.get("rule_id")
+                if rid:
+                    ids.append(rid)
+            elif item_data.get("item_type") == "set":
+                for rid in item_data.get("rule_ids", []) or []:
+                    ids.append(rid)
+        # 去重且保持顺序
+        seen = set()
+        out = []
+        for rid in ids:
+            if rid not in seen:
+                seen.add(rid)
+                out.append(rid)
+        return out
 
     def _on_file_selected(self, path: str):
         pass
@@ -172,11 +269,7 @@ class TabRuleValidate(QWidget):
 
         header_rows = self.header_rows_spin.value()
         skip_top_rows = self.skip_top_spin.value()
-        ids = []
-        for item in self.rule_list.selectedItems():
-            text = item.text()
-            if "(" in text and ")" in text:
-                ids.append(text.split("(")[-1].rstrip(")"))
+        ids = self._collect_selected_rule_ids()
         self.progress.set_busy("校验中...")
         self._worker = ValidateWorker(
             path,
