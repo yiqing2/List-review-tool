@@ -41,10 +41,9 @@ ChecklistTool/
 │   └── results/            # 结果报告与导出
 │       ├── __init__.py
 │       └── tab.py
-└── ui/                     # 公共 UI（主窗口、登录、通用组件）
+└── ui/                     # 公共 UI（主窗口、通用组件）
     ├── __init__.py
     ├── main_window.py      # 主窗口与选项卡集成
-    ├── login_dialog.py
     └── widgets.py          # FilePathRow、ColumnSelector、ProgressWidget 等
 ```
 

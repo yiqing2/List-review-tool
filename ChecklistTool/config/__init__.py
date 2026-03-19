@@ -16,7 +16,6 @@ from .app_config import (
     save_json_safe,
     get_rules_fallback_path,
     RULES_DB_FILE,
-    CURRENT_USER_FILE,
 )
 
 __all__ = [
@@ -36,5 +35,4 @@ __all__ = [
     "save_json_safe",
     "get_rules_fallback_path",
     "RULES_DB_FILE",
-    "CURRENT_USER_FILE",
 ]
