@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QPushButton,
     QLabel,
     QGroupBox,
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QFileDialog,
     QComboBox,
+    QMenu,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -48,7 +50,10 @@ class TabRulesLib(QWidget):
         super().__init__(parent)
         self._engine = RuleEngine()
         self._current_rule_id = None
+        self._current_set_id = None
         self._edit_unlocked = False
+        self._collapsed_set_ids = set()
+        self._known_set_ids = set()
         self._setup_ui()
         self._load_rules()
 
@@ -71,11 +76,18 @@ class TabRulesLib(QWidget):
         self._path_label.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(self._path_label)
         split = QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(8)
         left = QWidget()
+        left.setMinimumWidth(220)
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(QLabel("规则列表"))
         self.rule_list = QListWidget()
+        self.rule_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.rule_list.currentItemChanged.connect(self._on_rule_selected)
+        self.rule_list.itemDoubleClicked.connect(self._on_rule_item_double_clicked)
+        self.rule_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.rule_list.customContextMenuRequested.connect(self._show_rule_list_context_menu)
         left_layout.addWidget(self.rule_list)
         btn_refresh = QPushButton("刷新列表")
         btn_refresh.clicked.connect(self._load_rules)
@@ -83,6 +95,7 @@ class TabRulesLib(QWidget):
         split.addWidget(left)
 
         right = QWidget()
+        right.setMinimumWidth(360)
         right_layout = QVBoxLayout(right)
         right_layout.addWidget(QLabel("规则详情与条件树"))
         right_layout.addWidget(QLabel("用于表头下拉的示例文件（可选）："))
@@ -126,24 +139,41 @@ class TabRulesLib(QWidget):
         self.btn_add = QPushButton("新增规则")
         self.btn_add.clicked.connect(self._add_rule)
         self.import_template_combo = QComboBox()
-        self.import_template_combo.addItem("模板1：基准列+case列（每行一条规则）", "template1")
-        self.import_template_combo.addItem("模板2：多条件=>结果（每行一条规则）", "template2")
+        self.import_template_combo.addItem("模板1：基准列+case列", "template1")
+        self.import_template_combo.addItem("模板2：多条件=>结果", "template2")
+        self.import_template_combo.setMinimumWidth(170)
         self.btn_import_rules = QPushButton("导入规则表")
         self.btn_import_rules.clicked.connect(self._import_rules_by_template)
+        self.btn_assign_set = QPushButton("加入规则集")
+        self.btn_assign_set.clicked.connect(self._assign_selected_rules_to_set)
+        self.btn_remove_from_set = QPushButton("移出规则集")
+        self.btn_remove_from_set.clicked.connect(self._remove_selected_rules_from_set)
         self.btn_save = QPushButton("保存当前规则")
         self.btn_save.clicked.connect(self._save_rule)
         self.btn_del = QPushButton("删除当前规则")
         self.btn_del.clicked.connect(self._del_rule)
-        h = QHBoxLayout()
-        h.addWidget(self.btn_add)
-        h.addWidget(self.import_template_combo)
-        h.addWidget(self.btn_import_rules)
-        h.addWidget(self.btn_save)
-        h.addWidget(self.btn_del)
-        right_layout.addLayout(h)
+        action_grid = QGridLayout()
+        action_grid.setHorizontalSpacing(8)
+        action_grid.setVerticalSpacing(8)
+        action_grid.addWidget(self.btn_add, 0, 0)
+        action_grid.addWidget(self.btn_save, 0, 1)
+        action_grid.addWidget(self.btn_del, 0, 2)
+
+        action_grid.addWidget(self.import_template_combo, 1, 0)
+        action_grid.addWidget(self.btn_import_rules, 1, 1)
+        action_grid.addWidget(self.btn_assign_set, 1, 2)
+        action_grid.addWidget(self.btn_remove_from_set, 2, 2)
+
+        action_grid.setColumnStretch(0, 1)
+        action_grid.setColumnStretch(1, 1)
+        action_grid.setColumnStretch(2, 1)
+        right_layout.addLayout(action_grid)
 
         self._apply_edit_lock()
         split.addWidget(right)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 5)
+        split.setSizes([320, 780])
         layout.addWidget(split)
 
     def _apply_edit_lock(self):
@@ -157,6 +187,8 @@ class TabRulesLib(QWidget):
         self.btn_add.setEnabled(unlocked)
         self.import_template_combo.setEnabled(unlocked)
         self.btn_import_rules.setEnabled(unlocked)
+        self.btn_assign_set.setEnabled(unlocked)
+        self.btn_remove_from_set.setEnabled(unlocked)
         self.btn_save.setEnabled(unlocked)
         self.btn_del.setEnabled(unlocked)
         self.btn_unlock.setText("锁定编辑" if unlocked else "解锁编辑（需秘钥）")
@@ -199,22 +231,90 @@ class TabRulesLib(QWidget):
     def _load_rules(self):
         """从文件重新加载规则并刷新列表。"""
         self._engine.load_rules()
+        existing_ids = {s.set_id for s in self._engine.get_rule_sets()}
+        new_ids = existing_ids - self._known_set_ids
+        self._known_set_ids = set(existing_ids)
+        self._collapsed_set_ids = {sid for sid in self._collapsed_set_ids if sid in existing_ids}
+        self._collapsed_set_ids.update(new_ids)
         self._refresh_list_from_engine()
         self._path_label.setText("规则库保存位置：" + (self._engine.rules_file or "—"))
 
     def _refresh_list_from_engine(self):
         """仅根据当前内存中的规则刷新列表（不读文件），用于新增后立即显示。"""
+        prev_rule_id = self._current_rule_id
+        self.rule_list.blockSignals(True)
         self.rule_list.clear()
-        for r in self._engine.get_rules():
+
+        rules = self._engine.get_rules()
+        rule_map = {r.rule_id: r for r in rules}
+        grouped_ids = set()
+
+        for rs in self._engine.get_rule_sets():
+            item_rule_ids = [rid for rid in rs.rule_ids if rid in rule_map]
+            if not item_rule_ids:
+                continue
+            grouped_ids.update(item_rule_ids)
+
+            group_item = QListWidgetItem(f"[规则集] {rs.name} ({len(item_rule_ids)} 条)")
+            group_item.setData(
+                Qt.ItemDataRole.UserRole,
+                {
+                    "item_type": "set",
+                    "set_id": rs.set_id,
+                    "rule_ids": item_rule_ids,
+                },
+            )
+            self.rule_list.addItem(group_item)
+
+            if rs.set_id in self._collapsed_set_ids:
+                continue
+
+            for rid in item_rule_ids:
+                r = rule_map[rid]
+                child_item = QListWidgetItem(f"   └ {r.name} ({r.rule_id})")
+                child_item.setData(
+                    Qt.ItemDataRole.UserRole,
+                    {
+                        "item_type": "rule",
+                        "rule_id": r.rule_id,
+                    },
+                )
+                self.rule_list.addItem(child_item)
+
+        for r in rules:
+            if r.rule_id in grouped_ids:
+                continue
             item = QListWidgetItem(f"{r.name} ({r.rule_id})")
-            item.setData(Qt.ItemDataRole.UserRole, r.rule_id)
+            item.setData(
+                Qt.ItemDataRole.UserRole,
+                {
+                    "item_type": "rule",
+                    "rule_id": r.rule_id,
+                },
+            )
             self.rule_list.addItem(item)
+
+        self.rule_list.blockSignals(False)
+
+        if prev_rule_id:
+            self._select_rule_item(prev_rule_id)
 
     def _on_rule_selected(self, current: QListWidgetItem, previous):
         if not current:
             self._current_rule_id = None
+            self._current_set_id = None
             return
-        rule_id = current.data(Qt.ItemDataRole.UserRole) or ""
+        item_data = current.data(Qt.ItemDataRole.UserRole) or {}
+        if item_data.get("item_type") == "set":
+            self._current_rule_id = None
+            self._current_set_id = item_data.get("set_id")
+            return
+        if item_data.get("item_type") != "rule":
+            self._current_rule_id = None
+            self._current_set_id = None
+            return
+        self._current_set_id = None
+        rule_id = item_data.get("rule_id") or ""
         for r in self._engine.get_rules():
             if r.rule_id == rule_id:
                 self._current_rule_id = rule_id
@@ -222,6 +322,174 @@ class TabRulesLib(QWidget):
                 self.tree_editor.load_node(r.root)
                 return
         self._current_rule_id = None
+
+    def _on_rule_item_double_clicked(self, item: QListWidgetItem):
+        item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+        if item_data.get("item_type") != "set":
+            return
+        set_id = item_data.get("set_id")
+        if not set_id:
+            return
+        if set_id in self._collapsed_set_ids:
+            self._collapsed_set_ids.remove(set_id)
+        else:
+            self._collapsed_set_ids.add(set_id)
+        self._refresh_list_from_engine()
+
+    def _select_rule_item(self, rule_id: str):
+        for rs in self._engine.get_rule_sets():
+            if rule_id in rs.rule_ids and rs.set_id in self._collapsed_set_ids:
+                self._collapsed_set_ids.remove(rs.set_id)
+                self._refresh_list_from_engine()
+                break
+        for i in range(self.rule_list.count()):
+            item = self.rule_list.item(i)
+            item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+            if item_data.get("item_type") == "rule" and item_data.get("rule_id") == rule_id:
+                self.rule_list.setCurrentRow(i)
+                return
+
+    def _selected_rule_ids(self) -> list:
+        ids = []
+        for item in self.rule_list.selectedItems():
+            item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+            if item_data.get("item_type") == "rule":
+                rid = item_data.get("rule_id")
+                if rid:
+                    ids.append(rid)
+        return list(dict.fromkeys(ids))
+
+    def _selected_set_ids(self) -> list:
+        ids = []
+        for item in self.rule_list.selectedItems():
+            item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+            if item_data.get("item_type") == "set":
+                sid = item_data.get("set_id")
+                if sid:
+                    ids.append(sid)
+        return list(dict.fromkeys(ids))
+
+    def _show_rule_list_context_menu(self, pos):
+        item = self.rule_list.itemAt(pos)
+        if not item:
+            return
+        self.rule_list.setCurrentItem(item)
+        item_data = item.data(Qt.ItemDataRole.UserRole) or {}
+        item_type = item_data.get("item_type")
+        if item_type not in ("rule", "set"):
+            return
+
+        menu = QMenu(self)
+        rename_action = menu.addAction("重命名")
+        action = menu.exec(self.rule_list.mapToGlobal(pos))
+        if action != rename_action:
+            return
+        if not self._edit_unlocked:
+            QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
+            return
+
+        if item_type == "rule":
+            self._rename_rule_item(item_data)
+            return
+        self._rename_set_item(item_data)
+
+    def _rename_rule_item(self, item_data: dict):
+        rule_id = item_data.get("rule_id") or ""
+        if not rule_id:
+            return
+        old_name = ""
+        for r in self._engine.get_rules():
+            if r.rule_id == rule_id:
+                old_name = r.name
+                break
+        if not old_name:
+            QMessageBox.warning(self, "提示", "未找到该规则。")
+            return
+
+        new_name, ok = self._ask_text(title="重命名规则", label="请输入新规则名称：")
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            QMessageBox.warning(self, "提示", "规则名称不能为空。")
+            return
+
+        if not self._engine.rename_rule(rule_id, new_name):
+            QMessageBox.warning(self, "提示", "重命名失败。")
+            return
+        if not self._engine.save_rules():
+            QMessageBox.warning(self, "提示", "保存失败，请检查规则库路径是否可写。")
+            return
+        self._load_rules()
+        self._select_rule_item(rule_id)
+        self.rules_updated.emit()
+        QMessageBox.information(self, "提示", f"规则已重命名：{old_name} -> {new_name}")
+
+    def _rename_set_item(self, item_data: dict):
+        set_id = item_data.get("set_id") or ""
+        if not set_id:
+            return
+        old_name = ""
+        for rs in self._engine.get_rule_sets():
+            if rs.set_id == set_id:
+                old_name = rs.name
+                break
+        if not old_name:
+            QMessageBox.warning(self, "提示", "未找到该规则集。")
+            return
+
+        new_name, ok = self._ask_text(title="重命名规则集", label="请输入新规则集名称：")
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            QMessageBox.warning(self, "提示", "规则集名称不能为空。")
+            return
+
+        if not self._engine.rename_rule_set(set_id, new_name):
+            QMessageBox.warning(self, "提示", "重命名失败：可能是名称重复。")
+            return
+        if not self._engine.save_rules():
+            QMessageBox.warning(self, "提示", "保存失败，请检查规则库路径是否可写。")
+            return
+        self._load_rules()
+        self.rules_updated.emit()
+        QMessageBox.information(self, "提示", f"规则集已重命名：{old_name} -> {new_name}")
+
+    def _assign_selected_rules_to_set(self):
+        if not self._edit_unlocked:
+            QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
+            return
+        rule_ids = self._selected_rule_ids()
+        if not rule_ids:
+            QMessageBox.warning(self, "提示", "请先选中至少一条规则（可 Ctrl/Shift 多选）。")
+            return
+        set_name, ok = self._ask_text(title="规则集名称", label="请输入规则集名称：")
+        if not ok or not set_name.strip():
+            return
+        self._engine.assign_rules_to_set(rule_ids, set_name.strip(), source="manual")
+        if not self._engine.save_rules():
+            QMessageBox.warning(self, "提示", "保存规则集失败，请检查规则库路径是否可写。")
+            return
+        self._load_rules()
+        self.rules_updated.emit()
+        QMessageBox.information(self, "提示", f"已将 {len(rule_ids)} 条规则加入规则集：{set_name.strip()}。")
+
+    def _remove_selected_rules_from_set(self):
+        if not self._edit_unlocked:
+            QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
+            return
+        rule_ids = self._selected_rule_ids()
+        if not rule_ids:
+            QMessageBox.warning(self, "提示", "请先选中至少一条规则（可 Ctrl/Shift 多选）。")
+            return
+        self._engine.unassign_rules_from_set(rule_ids)
+        if not self._engine.save_rules():
+            QMessageBox.warning(self, "提示", "保存规则集失败，请检查规则库路径是否可写。")
+            return
+        self._load_rules()
+        self.rules_updated.emit()
+        QMessageBox.information(self, "提示", f"已将 {len(rule_ids)} 条规则移出规则集。")
 
     def _add_rule(self):
         if not self._edit_unlocked:
@@ -242,14 +510,11 @@ class TabRulesLib(QWidget):
         # 从内存刷新列表，确保新规则立即显示
         self._refresh_list_from_engine()
         new_id = rule.rule_id
-        for i in range(self.rule_list.count()):
-            item = self.rule_list.item(i)
-            if item and item.data(Qt.ItemDataRole.UserRole) == new_id:
-                self.rule_list.setCurrentRow(i)
-                self._current_rule_id = new_id
-                self.desc_edit.setPlainText(rule.description or "")
-                self.tree_editor.load_node(rule.root)
-                break
+        self._select_rule_item(new_id)
+        if self._current_rule_id != new_id:
+            self._current_rule_id = new_id
+            self.desc_edit.setPlainText(rule.description or "")
+            self.tree_editor.load_node(rule.root)
         self.rules_updated.emit()
         QMessageBox.information(self, "提示", "已添加规则，请编辑条件树后点击“保存当前规则”。")
 
@@ -332,6 +597,7 @@ class TabRulesLib(QWidget):
         created_count = 0
         skipped_rows = 0
         last_rule_id = None
+        imported_rule_ids = []
 
         import os
         file_base_name = os.path.splitext(os.path.basename(path))[0]
@@ -370,6 +636,7 @@ class TabRulesLib(QWidget):
             self._engine.add_rule(rule)
             created_count += 1
             last_rule_id = rule.rule_id
+            imported_rule_ids.append(rule.rule_id)
 
         if created_count == 0:
             QMessageBox.warning(self, "提示", "未导入任何规则：请检查基准列和 case 列是否有有效值。")
@@ -379,16 +646,21 @@ class TabRulesLib(QWidget):
             QMessageBox.warning(self, "提示", "导入后保存失败，请检查规则库路径是否可写。")
             return
 
+        self._engine.assign_rules_to_new_import_set(
+            imported_rule_ids,
+            base_name=f"导入模板1_{file_base_name}",
+            source="import_template1",
+        )
+        if not self._engine.save_rules():
+            QMessageBox.warning(self, "提示", "规则集保存失败，请检查规则库路径是否可写。")
+            return
+
         self._path_label.setText("规则库保存位置：" + (self._engine.rules_file or "—"))
         self._refresh_list_from_engine()
         self.set_columns_for_editor(usable_cols)
 
         if last_rule_id:
-            for i in range(self.rule_list.count()):
-                item = self.rule_list.item(i)
-                if item and item.data(Qt.ItemDataRole.UserRole) == last_rule_id:
-                    self.rule_list.setCurrentRow(i)
-                    break
+            self._select_rule_item(last_rule_id)
 
         self.rules_updated.emit()
         QMessageBox.information(
@@ -459,6 +731,7 @@ class TabRulesLib(QWidget):
         created_count = 0
         skipped_rows = 0
         last_rule_id = None
+        imported_rule_ids = []
 
         import os
         file_base_name = os.path.splitext(os.path.basename(path))[0]
@@ -505,6 +778,7 @@ class TabRulesLib(QWidget):
             self._engine.add_rule(rule)
             created_count += 1
             last_rule_id = rule.rule_id
+            imported_rule_ids.append(rule.rule_id)
 
         if created_count == 0:
             QMessageBox.warning(self, "提示", "未导入任何规则：请检查条件列与结果列是否有有效值。")
@@ -514,16 +788,21 @@ class TabRulesLib(QWidget):
             QMessageBox.warning(self, "提示", "导入后保存失败，请检查规则库路径是否可写。")
             return
 
+        self._engine.assign_rules_to_new_import_set(
+            imported_rule_ids,
+            base_name=f"导入模板2_{file_base_name}",
+            source="import_template2",
+        )
+        if not self._engine.save_rules():
+            QMessageBox.warning(self, "提示", "规则集保存失败，请检查规则库路径是否可写。")
+            return
+
         self._path_label.setText("规则库保存位置：" + (self._engine.rules_file or "—"))
         self._refresh_list_from_engine()
         self.set_columns_for_editor(usable_cols)
 
         if last_rule_id:
-            for i in range(self.rule_list.count()):
-                item = self.rule_list.item(i)
-                if item and item.data(Qt.ItemDataRole.UserRole) == last_rule_id:
-                    self.rule_list.setCurrentRow(i)
-                    break
+            self._select_rule_item(last_rule_id)
 
         self.rules_updated.emit()
         QMessageBox.information(
@@ -537,17 +816,61 @@ class TabRulesLib(QWidget):
         if not self._edit_unlocked:
             QMessageBox.warning(self, "提示", "规则库处于只读状态，请先点击“解锁编辑（需秘钥）”。")
             return
-        if not self._current_rule_id:
-            QMessageBox.warning(self, "提示", "请先选择一条规则。")
+        selected_rule_ids = self._selected_rule_ids()
+        selected_set_ids = self._selected_set_ids()
+
+        if selected_rule_ids:
+            if len(selected_rule_ids) > 1:
+                msg = "确定删除这些规则？"
+            else:
+                msg = "确定删除该规则？"
+            if QMessageBox.question(self, "确认", msg) != QMessageBox.StandardButton.Yes:
+                return
+
+            deleted = 0
+            for rid in selected_rule_ids:
+                if self._engine.remove_rule(rid):
+                    deleted += 1
+            self._engine.save_rules()
+            self._current_rule_id = None
+            self._current_set_id = None
+            self._load_rules()
+            self.rules_updated.emit()
+            if deleted > 1:
+                QMessageBox.information(self, "提示", f"已删除 {deleted} 条规则。")
+            elif deleted == 1:
+                QMessageBox.information(self, "提示", "已删除规则。")
+            else:
+                QMessageBox.warning(self, "提示", "未找到可删除的规则。")
             return
-        if QMessageBox.question(self, "确认", "确定删除该规则？") != QMessageBox.StandardButton.Yes:
+
+        if selected_set_ids:
+            if len(selected_set_ids) > 1:
+                msg = "确定删除这些规则集？"
+            else:
+                msg = "确定删除该规则集？"
+            if QMessageBox.question(self, "确认", msg) != QMessageBox.StandardButton.Yes:
+                return
+
+            deleted = 0
+            for sid in selected_set_ids:
+                if self._engine.remove_rule_set(sid):
+                    deleted += 1
+            self._engine.save_rules()
+            self._current_set_id = None
+            self._load_rules()
+            self.rules_updated.emit()
+            if deleted > 1:
+                QMessageBox.information(self, "提示", f"已删除 {deleted} 个规则集。")
+            elif deleted == 1:
+                QMessageBox.information(self, "提示", "已删除规则集。")
+            else:
+                QMessageBox.warning(self, "提示", "未找到可删除的规则集。")
             return
-        self._engine.remove_rule(self._current_rule_id)
-        self._engine.save_rules()
-        self._current_rule_id = None
-        self._load_rules()
-        self.rules_updated.emit()
-        QMessageBox.information(self, "提示", "已删除。")
+
+        if not self._current_rule_id and not self._current_set_id:
+            QMessageBox.warning(self, "提示", "请先选择一条规则或规则集。")
+            return
 
     def set_columns_for_editor(self, columns: list):
         """从外部传入当前文件的列名，供条件树选择字段。"""

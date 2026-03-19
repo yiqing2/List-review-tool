@@ -108,6 +108,34 @@ class ValidationRule:
         )
 
 
+@dataclass
+class RuleSet:
+    """规则集合：用于在 UI 中折叠展示及批量选择。"""
+    set_id: str = ""
+    name: str = ""
+    rule_ids: List[str] = dc_field(default_factory=list)
+    source: str = "manual"
+
+    def to_dict(self) -> dict:
+        return {
+            "set_id": self.set_id,
+            "name": self.name,
+            "rule_ids": self.rule_ids,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RuleSet":
+        if not d:
+            return cls()
+        return cls(
+            set_id=d.get("set_id", ""),
+            name=d.get("name", ""),
+            rule_ids=list(d.get("rule_ids", []) or []),
+            source=d.get("source", "manual"),
+        )
+
+
 # -----------------------------------------------------------------------------
 # 规则匹配结果
 # -----------------------------------------------------------------------------
@@ -132,6 +160,7 @@ class RuleEngine:
     def __init__(self, rules_file: Optional[str] = None):
         self.rules_file = rules_file or RULES_DB_FILE
         self._rules: List[ValidationRule] = []
+        self._rule_sets: List[RuleSet] = []
 
     def _eval_cell(self, cell_value: Any, operator: str, expected: Any) -> bool:
         """单单元格与条件的判断。"""
@@ -325,11 +354,17 @@ class RuleEngine:
             except Exception:
                 pass
         self._rules = [ValidationRule.from_dict(r) for r in data.get("rules", [])]
+        self._rule_sets = [RuleSet.from_dict(s) for s in data.get("rule_sets", [])]
+        self._sanitize_rule_sets()
         return True
 
     def save_rules(self) -> bool:
         """保存规则库到文件；若默认路径不可写则自动保存到用户目录以实现长期保存。"""
-        data = {"rules": [r.to_dict() for r in self._rules]}
+        self._sanitize_rule_sets()
+        data = {
+            "rules": [r.to_dict() for r in self._rules],
+            "rule_sets": [s.to_dict() for s in self._rule_sets],
+        }
         if save_json_safe(self.rules_file, data):
             return True
         try:
@@ -356,14 +391,140 @@ class RuleEngine:
                 return True
         return False
 
+    def rename_rule(self, rule_id: str, new_name: str) -> bool:
+        """重命名单条规则。"""
+        name = (new_name or "").strip()
+        if not name:
+            return False
+        for r in self._rules:
+            if r.rule_id == rule_id:
+                r.name = name
+                return True
+        return False
+
     def remove_rule(self, rule_id: str) -> bool:
         """删除规则（管理员）。"""
         for i, r in enumerate(self._rules):
             if r.rule_id == rule_id:
                 self._rules.pop(i)
+                for s in self._rule_sets:
+                    if rule_id in s.rule_ids:
+                        s.rule_ids = [rid for rid in s.rule_ids if rid != rule_id]
+                self._rule_sets = [s for s in self._rule_sets if s.rule_ids]
                 return True
         return False
 
     def get_rules(self) -> List[ValidationRule]:
         """返回当前规则列表（只读给普通用户）。"""
         return list(self._rules)
+
+    def get_rule_sets(self) -> List[RuleSet]:
+        """返回规则集合列表。"""
+        self._sanitize_rule_sets()
+        return list(self._rule_sets)
+
+    def rename_rule_set(self, set_id: str, new_name: str) -> bool:
+        """重命名规则集合。"""
+        name = (new_name or "").strip()
+        if not name:
+            return False
+        # 不允许与现有规则集重名（同一个 set_id 除外）
+        for s in self._rule_sets:
+            if s.set_id != set_id and s.name == name:
+                return False
+        for s in self._rule_sets:
+            if s.set_id == set_id:
+                s.name = name
+                return True
+        return False
+
+    def assign_rules_to_set(self, rule_ids: List[str], set_name: str, source: str = "manual") -> Optional[str]:
+        """将若干规则划入同一规则集（规则只属于一个规则集）。"""
+        name = (set_name or "").strip()
+        valid_ids = [rid for rid in (rule_ids or []) if rid in {r.rule_id for r in self._rules}]
+        if not name or not valid_ids:
+            return None
+
+        for s in self._rule_sets:
+            s.rule_ids = [rid for rid in s.rule_ids if rid not in valid_ids]
+
+        target = None
+        for s in self._rule_sets:
+            if s.name == name:
+                target = s
+                break
+
+        if target is None:
+            target = RuleSet(set_id=f"set_{len(self._rule_sets)}_{id(self)}", name=name, rule_ids=[], source=source)
+            self._rule_sets.append(target)
+
+        seen = set(target.rule_ids)
+        for rid in valid_ids:
+            if rid not in seen:
+                target.rule_ids.append(rid)
+                seen.add(rid)
+
+        if source and target.source == "manual":
+            target.source = source
+
+        self._sanitize_rule_sets()
+        return target.set_id
+
+    def unassign_rules_from_set(self, rule_ids: List[str]) -> None:
+        """将规则从规则集移出。"""
+        if not rule_ids:
+            return
+        remove_ids = set(rule_ids)
+        for s in self._rule_sets:
+            s.rule_ids = [rid for rid in s.rule_ids if rid not in remove_ids]
+        self._rule_sets = [s for s in self._rule_sets if s.rule_ids]
+
+    def remove_rule_set(self, set_id: str) -> bool:
+        """删除规则集本身，不删除其中规则。"""
+        for i, s in enumerate(self._rule_sets):
+            if s.set_id == set_id:
+                self._rule_sets.pop(i)
+                return True
+        return False
+
+    def assign_rules_to_new_import_set(self, rule_ids: List[str], base_name: str, source: str) -> Optional[str]:
+        """导入规则后自动创建规则集，重名时自动追加序号。"""
+        base = (base_name or "导入规则集").strip()
+        if not rule_ids:
+            return None
+        existing_names = {s.name for s in self._rule_sets}
+        name = base
+        i = 2
+        while name in existing_names:
+            name = f"{base}_{i}"
+            i += 1
+        return self.assign_rules_to_set(rule_ids, name, source=source)
+
+    def get_rule_ids_in_set(self, set_id: str) -> List[str]:
+        """按 set_id 返回该规则集包含的有效规则 id 列表。"""
+        valid_ids = {r.rule_id for r in self._rules}
+        for s in self._rule_sets:
+            if s.set_id == set_id:
+                return [rid for rid in s.rule_ids if rid in valid_ids]
+        return []
+
+    def _sanitize_rule_sets(self) -> None:
+        """清理无效规则集数据，保持持久化结构稳定。"""
+        valid_ids = {r.rule_id for r in self._rules}
+        cleaned: List[RuleSet] = []
+        for s in self._rule_sets:
+            if not s.set_id:
+                s.set_id = f"set_{len(cleaned)}_{id(self)}"
+            s.name = (s.name or "").strip()
+            if not s.name:
+                continue
+            unique_ids = []
+            seen = set()
+            for rid in s.rule_ids:
+                if rid in valid_ids and rid not in seen:
+                    unique_ids.append(rid)
+                    seen.add(rid)
+            s.rule_ids = unique_ids
+            if s.rule_ids:
+                cleaned.append(s)
+        self._rule_sets = cleaned
